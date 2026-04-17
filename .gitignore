@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+
+# Build output
+dist/
+build/
+
+# Secrets / env
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Local deploy scripts contain plaintext server/DB passwords — never commit
+.deploy/
+
+# UI standard reference (lives in its own repo)
+KortexdUI/
+
+# Runtime data (user uploads, rendered output, downloaded YT videos)
+uploads/
+outputs/
+downloads/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
