@@ -197,6 +197,14 @@ app.post('/api/projects/:projectId/search', async (req, res) => {
     (a, b) => (b.searchScore ?? 0) - (a.searchScore ?? 0),
   );
 
+  // Save pagination state for the "Next 20 videos" button
+  const nextToken     = youtubeResults._nextPageToken  || null;
+  const effectiveQ    = youtubeResults._effectiveQuery || effectiveTopic;
+  await query(
+    `update projects set last_search_query = $1, last_search_page_token = $2 where id = $3`,
+    [effectiveQ, nextToken, projectId],
+  );
+
   const inserted = [];
   for (const item of merged) {
     const result = await query(
@@ -213,7 +221,70 @@ app.post('/api/projects/:projectId/search', async (req, res) => {
     );
     inserted.push(result.rows[0]);
   }
-  res.json({ purged, inserted: inserted.length, candidates: inserted });
+  res.json({
+    purged,
+    inserted:      inserted.length,
+    candidates:    inserted,
+    hasMore:       !!nextToken,
+    nextPageToken: nextToken || null,
+  });
+});
+
+app.post('/api/projects/:projectId/search/next', async (req, res) => {
+  const { projectId } = req.params;
+  const projRes = await query(
+    `select project_type, preferred_language, last_search_query, last_search_page_token
+       from projects where id = $1`,
+    [projectId],
+  );
+  if (!projRes.rowCount) return res.status(404).json({ error: 'project not found' });
+
+  const proj = projRes.rows[0];
+  if (!proj.last_search_page_token || !proj.last_search_query) {
+    return res.status(400).json({ error: 'no previous search; run Search first' });
+  }
+
+  const youtubeResults = await searchYoutubeCandidates(proj.last_search_query, {
+    projectType:       proj.project_type,
+    preferredLanguage: proj.preferred_language,
+    pageToken:         proj.last_search_page_token,
+  });
+
+  // Filter out URLs we already have in the project to avoid duplicates
+  const existingUrls = new Set((await query(
+    `select url from candidate_videos where project_id = $1`, [projectId],
+  )).rows.map(r => r.url));
+  const fresh = youtubeResults.filter(r => !existingUrls.has(r.url));
+
+  const inserted = [];
+  for (const item of fresh) {
+    const result = await query(
+      `insert into candidate_videos (
+         project_id, source, source_video_id, title, url, thumbnail_url,
+         duration_sec, description, published_at, status, search_score,
+         domain_tags, match_reason
+       )
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'discovered',$10,$11,$12)
+       returning *`,
+      [projectId, item.source, item.sourceVideoId, item.title, item.url, item.thumbnailUrl,
+       item.durationSec, item.description, item.publishedAt, item.searchScore ?? 0,
+       JSON.stringify(item.domainTags || {}), item.matchReason || null],
+    );
+    inserted.push(result.rows[0]);
+  }
+
+  const nextToken = youtubeResults._nextPageToken || null;
+  await query(
+    `update projects set last_search_page_token = $1 where id = $2`,
+    [nextToken, projectId],
+  );
+
+  res.json({
+    inserted:      inserted.length,
+    candidates:    inserted,
+    hasMore:       !!nextToken,
+    nextPageToken: nextToken || null,
+  });
 });
 
 app.get('/api/projects/:projectId/candidate-videos', async (req, res) => {
@@ -223,6 +294,45 @@ app.get('/api/projects/:projectId/candidate-videos', async (req, res) => {
     [projectId],
   );
   res.json(result.rows);
+});
+
+async function deleteCandidatesByIds(ids) {
+  if (!Array.isArray(ids) || ids.length === 0) return 0;
+  const existing = await query(
+    `select id, local_video_path, local_thumbnail_path
+       from candidate_videos
+      where id = ANY($1::uuid[])`,
+    [ids],
+  );
+  await Promise.all(existing.rows.flatMap((row) => {
+    const paths = [
+      path.join(DOWNLOADS_DIR, `${row.id}.mp4`),
+      path.join(DOWNLOADS_DIR, `${row.id}.webm`),
+      path.join(DOWNLOADS_DIR, `${row.id}.mkv`),
+      path.join(DOWNLOADS_DIR, `${row.id}.mov`),
+      path.join(DOWNLOADS_DIR, `${row.id}.jpg`),
+    ];
+    for (const p of [row.local_video_path, row.local_thumbnail_path]) {
+      if (p && p.startsWith('/downloads/')) {
+        paths.push(path.join(DOWNLOADS_DIR, p.slice('/downloads/'.length)));
+      }
+    }
+    return paths.map((fp) => fsp.unlink(fp).catch(() => {}));
+  }));
+  const del = await query(
+    `delete from candidate_videos where id = ANY($1::uuid[])`,
+    [ids],
+  );
+  return del.rowCount;
+}
+
+app.post('/api/candidate-videos/bulk-delete', async (req, res) => {
+  const { ids } = req.body || {};
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ error: 'ids must be a non-empty array' });
+  }
+  const deleted = await deleteCandidatesByIds(ids);
+  res.json({ deleted });
 });
 
 app.get('/api/candidate-videos/:candidateVideoId', async (req, res) => {

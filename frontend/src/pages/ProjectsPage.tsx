@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   FolderKanban, Search, Plus, Sparkles, Upload, Film, Clapperboard,
-  Scissors, RefreshCw, PlayCircle,
+  Scissors, RefreshCw, PlayCircle, Trash2, CheckSquare, ListPlus,
 } from 'lucide-react';
 import api from '../api';
 import type { CandidateVideo, ClipOperation, Project, ProjectType, RenderJob, SelectedClip, Asset } from '../types';
@@ -25,6 +25,9 @@ export function ProjectsPage() {
   const [includeFacebook, setIncludeFacebook] = useState(true);
   const [loading,         setLoading]         = useState(false);
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(null);
+  const [checkedIds,          setCheckedIds]          = useState<string[]>([]);
+  const [canLoadMore,         setCanLoadMore]         = useState(false);
+  const [loadingMore,         setLoadingMore]         = useState(false);
 
   const selectedCandidate = useMemo(
     () => candidateVideos.find(v => v.id === selectedCandidateId) || null,
@@ -68,10 +71,39 @@ export function ProjectsPage() {
     if (!activeProjectId) return;
     setLoading(true);
     try {
-      await api.post(`/projects/${activeProjectId}/search`, { includeFacebook });
+      const res = await api.post<{ hasMore?: boolean }>(`/projects/${activeProjectId}/search`, { includeFacebook });
+      setCanLoadMore(!!res.data?.hasMore);
       setSelectedCandidateId(null); // previous selection is gone
+      setCheckedIds([]);
       await loadProject(activeProjectId);
     } finally { setLoading(false); }
+  }
+
+  async function loadMoreCandidates() {
+    if (!activeProjectId || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const res = await api.post<{ hasMore?: boolean }>(`/projects/${activeProjectId}/search/next`);
+      setCanLoadMore(!!res.data?.hasMore);
+      await loadProject(activeProjectId);
+    } finally { setLoadingMore(false); }
+  }
+
+  async function deleteSelected(ids: string[]) {
+    if (!ids.length) return;
+    await api.post('/candidate-videos/bulk-delete', { ids });
+    if (selectedCandidateId && ids.includes(selectedCandidateId)) {
+      setSelectedCandidateId(null);
+    }
+    setCheckedIds([]);
+    await loadProject(activeProjectId);
+  }
+
+  async function keepSelectedOnly() {
+    const keep = new Set(checkedIds);
+    const idsToDelete = candidateVideos.filter(c => !keep.has(c.id)).map(c => c.id);
+    if (!idsToDelete.length) return;
+    await deleteSelected(idsToDelete);
   }
 
   async function updateCandidateStatus(candidateVideoId: string, status: CandidateVideo['status']) {
@@ -321,15 +353,54 @@ export function ProjectsPage() {
             No candidates yet. Click <strong>Search Candidate Videos</strong> above.
           </div>
         ) : (
-          <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] gap-4" style={{ minHeight: '540px' }}>
-            <div className="border border-theme-card-border rounded-lg overflow-hidden" style={{ height: '540px' }}>
-              <CandidatesGrid
-                rows={candidateVideos}
-                selectedId={selectedCandidateId}
-                onRowSelect={(v) => setSelectedCandidateId(v.id)}
-              />
+          <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] gap-4" style={{ minHeight: '600px' }}>
+            <div className="flex flex-col gap-2" style={{ height: '600px' }}>
+              {/* Toolbar: selection count + actions */}
+              <div className="flex items-center flex-wrap gap-2 p-2 border border-theme-card-border rounded-lg bg-gray-50">
+                <span className="text-sm text-theme-text-primary font-medium pl-1">
+                  {checkedIds.length > 0
+                    ? <>{checkedIds.length} selected</>
+                    : <span className="text-theme-text-muted">No selection</span>}
+                  <span className="text-theme-text-muted"> / {candidateVideos.length} total</span>
+                </span>
+                <div className="flex-1" />
+                <button
+                  className="btn btn-sm btn-success"
+                  onClick={() => void keepSelectedOnly()}
+                  disabled={checkedIds.length === 0 || checkedIds.length === candidateVideos.length}
+                  title="Delete every row that is NOT checked"
+                >
+                  <CheckSquare className="h-3.5 w-3.5" /> Keep Selected
+                </button>
+                <button
+                  className="btn btn-sm btn-danger"
+                  onClick={() => void deleteSelected(checkedIds)}
+                  disabled={checkedIds.length === 0}
+                  title="Delete the checked rows (and their downloads)"
+                >
+                  <Trash2 className="h-3.5 w-3.5" /> Delete Selected
+                </button>
+                <button
+                  className="btn btn-sm btn-primary"
+                  onClick={() => void loadMoreCandidates()}
+                  disabled={!canLoadMore || loadingMore}
+                  title="Fetch the next 10 results from YouTube and append them"
+                >
+                  {loadingMore
+                    ? <><RefreshCw className="h-3.5 w-3.5 animate-spin" /> Loading…</>
+                    : <><ListPlus className="h-3.5 w-3.5" /> Next 10 Videos</>}
+                </button>
+              </div>
+              <div className="flex-1 border border-theme-card-border rounded-lg overflow-hidden">
+                <CandidatesGrid
+                  rows={candidateVideos}
+                  selectedId={selectedCandidateId}
+                  onRowSelect={(v) => setSelectedCandidateId(v.id)}
+                  onCheckedChange={setCheckedIds}
+                />
+              </div>
             </div>
-            <div style={{ height: '540px' }}>
+            <div style={{ height: '600px' }}>
               <CandidateDetails
                 candidate={selectedCandidate}
                 onApprove={(id)    => void updateCandidateStatus(id, 'approved')}

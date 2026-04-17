@@ -114,23 +114,16 @@ def heuristic_summary(candidate: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def llm_summary(candidate: dict[str, Any], api_key: str) -> dict[str, Any] | None:
-    """Use Anthropic to produce higher-quality domain-aware analysis.
-    Returns None if the call fails, so the caller can fall back to heuristic.
-    """
-    try:
-        import anthropic  # lazy
-        client = anthropic.Anthropic(api_key=api_key)
-        title       = candidate.get("title", "")
-        description = candidate.get("description", "")
-        duration    = candidate.get("duration_sec")
-        domain_tags = candidate.get("domain_tags") or {}
-
-        system = (
-            "You analyze candidate videos for a road / soil-stabilization video-editing studio. "
-            "You are strict about engineering relevance. Output JSON only."
-        )
-        user_prompt = f"""A candidate video has this metadata:
+def _build_prompt(candidate: dict[str, Any]) -> tuple[str, str]:
+    title       = candidate.get("title", "")
+    description = candidate.get("description", "")
+    duration    = candidate.get("duration_sec")
+    domain_tags = candidate.get("domain_tags") or {}
+    system = (
+        "You analyze candidate videos for a road / soil-stabilization video-editing studio. "
+        "You are strict about engineering relevance. Output JSON only."
+    )
+    user_prompt = f"""A candidate video has this metadata:
 
 Title: {title}
 Description: {description}
@@ -144,6 +137,57 @@ Produce a compact JSON object with these exact keys:
 
 Return only the JSON object, no prose.
 """
+    return system, user_prompt
+
+
+def _parse_llm_json(text: str) -> dict[str, Any] | None:
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end == -1:
+        return None
+    try:
+        obj = json.loads(text[start : end + 1])
+    except Exception:
+        return None
+    return {
+        "summary":    (obj.get("summary") or "").strip()[:1200],
+        "strengths":  [str(s).strip() for s in (obj.get("strengths") or [])][:6],
+        "weaknesses": [str(s).strip() for s in (obj.get("weaknesses") or [])][:6],
+    }
+
+
+def openai_summary(candidate: dict[str, Any], api_key: str) -> dict[str, Any] | None:
+    try:
+        from openai import OpenAI  # lazy
+        client = OpenAI(api_key=api_key)
+        system, user_prompt = _build_prompt(candidate)
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            max_tokens=800,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user",   "content": user_prompt},
+            ],
+            response_format={"type": "json_object"},
+        )
+        text = resp.choices[0].message.content or ""
+        parsed = _parse_llm_json(text)
+        if not parsed:
+            return None
+        parsed["engine"] = "openai"
+        return parsed
+    except Exception as exc:
+        print(f"[openai_summary] failed: {exc!r}")
+        return None
+
+
+def llm_summary(candidate: dict[str, Any], api_key: str) -> dict[str, Any] | None:
+    """Use Anthropic to produce higher-quality domain-aware analysis.
+    Returns None if the call fails, so the caller can fall back to heuristic.
+    """
+    try:
+        import anthropic  # lazy
+        client = anthropic.Anthropic(api_key=api_key)
+        system, user_prompt = _build_prompt(candidate)
         resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=800,
@@ -151,28 +195,34 @@ Return only the JSON object, no prose.
             messages=[{"role": "user", "content": user_prompt}],
         )
         text = "".join(block.text for block in resp.content if getattr(block, "type", None) == "text")
-        # Robust JSON extraction
-        start = text.find("{")
-        end   = text.rfind("}")
-        if start == -1 or end == -1:
+        parsed = _parse_llm_json(text)
+        if not parsed:
             return None
-        obj = json.loads(text[start : end + 1])
-        return {
-            "summary":    (obj.get("summary") or "").strip()[:1200],
-            "strengths":  [str(s).strip() for s in (obj.get("strengths") or [])][:6],
-            "weaknesses": [str(s).strip() for s in (obj.get("weaknesses") or [])][:6],
-            "engine":     "anthropic",
-        }
+        parsed["engine"] = "anthropic"
+        return parsed
     except Exception as exc:
         print(f"[llm_summary] failed, falling back: {exc!r}")
         return None
 
 
 def analyze_candidate_text(candidate: dict[str, Any]) -> dict[str, Any]:
-    """Primary entry — prefers LLM if ANTHROPIC_API_KEY env is set, else heuristic."""
-    api_key = os.environ.get("ANTHROPIC_API_KEY") or candidate.get("_anthropic_api_key")
-    if api_key:
-        out = llm_summary(candidate, api_key)
+    """Primary entry — prefers OpenAI > Anthropic > heuristic."""
+    openai_key = (
+        os.environ.get("OPENAI_API_KEY")
+        or candidate.get("_openai_api_key")
+    )
+    if openai_key:
+        out = openai_summary(candidate, openai_key)
         if out:
             return out
+
+    anthropic_key = (
+        os.environ.get("ANTHROPIC_API_KEY")
+        or candidate.get("_anthropic_api_key")
+    )
+    if anthropic_key:
+        out = llm_summary(candidate, anthropic_key)
+        if out:
+            return out
+
     return heuristic_summary(candidate)

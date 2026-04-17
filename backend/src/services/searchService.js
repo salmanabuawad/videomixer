@@ -21,7 +21,7 @@ async function readConfigValue(key) {
  * In production this should call the YouTube Data API. Until an API key is
  * configured, we return domain-aware demo results so the workflow is usable.
  */
-export async function searchYoutubeCandidates(topic, { projectType = 'generic', preferredLanguage = null } = {}) {
+export async function searchYoutubeCandidates(topic, { projectType = 'generic', preferredLanguage = null, pageToken = null } = {}) {
   const phrases = projectType === 'road_soil_stabilization' ? expandTopic(topic) : [topic];
 
   // Real YouTube Data API v3 if a key is saved in the config table
@@ -32,18 +32,18 @@ export async function searchYoutubeCandidates(topic, { projectType = 'generic', 
       const effectiveQuery = projectType === 'road_soil_stabilization'
         ? `${primary} road stabilization`
         : primary;
-      const raw = await youtubeSearch({
+      const { items, nextPageToken } = await youtubeSearch({
         apiKey,
         query: effectiveQuery,
-        maxResults: 20,
+        maxResults: 10,
         relevanceLanguage: preferredLanguage || undefined,
+        pageToken: pageToken || undefined,
       });
-      return raw.map((item) => {
+      const mapped = items.map((item) => {
         const { tags, scoreAdjustment, matchReason } = inferTags({
           title:       item.title,
           description: item.description,
         });
-        // Start with a mild baseline, boost by rank position and domain adjustment
         const baseline = Math.max(0.4, 0.9 - item._rank * 0.03);
         return {
           ...item,
@@ -52,6 +52,9 @@ export async function searchYoutubeCandidates(topic, { projectType = 'generic', 
           matchReason,
         };
       });
+      mapped._nextPageToken  = nextPageToken;
+      mapped._effectiveQuery = effectiveQuery;
+      return mapped;
     } catch (err) {
       console.error('[youtubeSearch] real API failed, falling back to demo seeds:', err?.message || err);
       // fall through to demo seeds

@@ -205,15 +205,12 @@ def heuristic_scores(candidate: dict[str, Any]) -> dict[str, Any]:
 
 # ── LLM upgrade ──────────────────────────────────────────────────────────────
 
-def llm_scores(candidate: dict[str, Any], api_key: str) -> dict[str, Any] | None:
-    try:
-        import anthropic
-        client = anthropic.Anthropic(api_key=api_key)
-        system = (
-            "You evaluate candidate videos for a road / soil-stabilization "
-            "engineering video studio. Be strict. Output strict JSON only."
-        )
-        user_prompt = f"""Score this candidate on a 0-100 scale on three axes:
+def _build_eval_prompt(candidate: dict[str, Any]) -> tuple[str, str]:
+    system = (
+        "You evaluate candidate videos for a road / soil-stabilization "
+        "engineering video studio. Be strict. Output strict JSON only."
+    )
+    user_prompt = f"""Score this candidate on a 0-100 scale on three axes:
 
 - convincingness: how persuasive / credible the video is for a road-engineering audience (evidence, data, expertise signals).
 - content_quality: narration density, structure, signal-to-noise, completeness of explanation.
@@ -236,6 +233,60 @@ Return JSON with exactly these keys:
   "field_relevance": {{"score": int, "comment": str}}
 }}
 """
+    return system, user_prompt
+
+
+def _parse_eval_json(text: str) -> dict[str, Any] | None:
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end == -1:
+        return None
+    try:
+        obj = json.loads(text[start : end + 1])
+    except Exception:
+        return None
+    out = {}
+    for k in ("convincingness", "content_quality", "field_relevance"):
+        v = obj.get(k) or {}
+        try:
+            score = int(v.get("score") or 0)
+        except Exception:
+            score = 0
+        out[k] = {
+            "score":   max(0, min(100, score)),
+            "comment": str(v.get("comment") or "")[:160],
+        }
+    return out
+
+
+def openai_scores(candidate: dict[str, Any], api_key: str) -> dict[str, Any] | None:
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key)
+        system, user_prompt = _build_eval_prompt(candidate)
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            max_tokens=500,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user",   "content": user_prompt},
+            ],
+            response_format={"type": "json_object"},
+        )
+        text = resp.choices[0].message.content or ""
+        parsed = _parse_eval_json(text)
+        if parsed:
+            parsed["_engine"] = "openai"
+        return parsed
+    except Exception as exc:
+        print(f"[openai_scores] failed: {exc!r}")
+        return None
+
+
+def llm_scores(candidate: dict[str, Any], api_key: str) -> dict[str, Any] | None:
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        system, user_prompt = _build_eval_prompt(candidate)
         resp = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=500,
@@ -243,16 +294,10 @@ Return JSON with exactly these keys:
             messages=[{"role": "user", "content": user_prompt}],
         )
         text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
-        start, end = text.find("{"), text.rfind("}")
-        if start == -1 or end == -1: return None
-        obj = json.loads(text[start : end + 1])
-        out = {}
-        for k in ("convincingness", "content_quality", "field_relevance"):
-            v = obj.get(k) or {}
-            try: score = int(v.get("score") or 0)
-            except Exception: score = 0
-            out[k] = {"score": max(0, min(100, score)), "comment": str(v.get("comment") or "")[:160]}
-        return out
+        parsed = _parse_eval_json(text)
+        if parsed:
+            parsed["_engine"] = "anthropic"
+        return parsed
     except Exception as exc:
         print(f"[llm_scores] failed: {exc!r}")
         return None
@@ -264,11 +309,23 @@ AXES = ("convincingness", "content_quality", "field_relevance", "video_quality")
 
 
 def evaluate_candidate(candidate: dict[str, Any], video_path: Path | None = None) -> dict[str, Any]:
-    # Subjective axes
-    api_key = os.environ.get("ANTHROPIC_API_KEY") or candidate.get("_anthropic_api_key")
+    # Subjective axes — prefer OpenAI > Anthropic > heuristic
     subj = None
-    if api_key:
-        subj = llm_scores(candidate, api_key)
+    engine_used = "heuristic"
+
+    openai_key = os.environ.get("OPENAI_API_KEY") or candidate.get("_openai_api_key")
+    if openai_key:
+        subj = openai_scores(candidate, openai_key)
+        if subj:
+            engine_used = "openai"
+
+    if not subj:
+        anthropic_key = os.environ.get("ANTHROPIC_API_KEY") or candidate.get("_anthropic_api_key")
+        if anthropic_key:
+            subj = llm_scores(candidate, anthropic_key)
+            if subj:
+                engine_used = "anthropic"
+
     if not subj:
         subj = heuristic_scores(candidate)
 
@@ -302,5 +359,5 @@ def evaluate_candidate(candidate: dict[str, Any], video_path: Path | None = None
         "scores":        scores,
         "comments":      comments,
         "video_metrics": metrics,
-        "engine":        "anthropic" if api_key and subj is not None and subj is not heuristic_scores(candidate) else "heuristic",
+        "engine":        engine_used,
     }

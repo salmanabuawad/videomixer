@@ -54,6 +54,7 @@ class AnalyzePayload(BaseModel):
     cookies_txt:  Optional[str] = None
     # Optional API keys forwarded by backend (encrypted in DB, decrypted before sending)
     anthropic_api_key: Optional[str] = None
+    openai_api_key:    Optional[str] = None
 
 
 @app.get("/health")
@@ -163,6 +164,7 @@ def analyze(payload: AnalyzePayload):
                 "duration_sec": payload.duration_sec,
                 "domain_tags":  payload.domain_tags,
                 "_anthropic_api_key": payload.anthropic_api_key,
+                "_openai_api_key":    payload.openai_api_key,
             }
             analysis   = analyze_candidate_text(cand_meta)
             evaluation = evaluate_candidate(cand_meta, video_path=None)
@@ -185,6 +187,7 @@ def analyze(payload: AnalyzePayload):
                 "duration_sec": payload.duration_sec,
                 "domain_tags":  payload.domain_tags,
                 "_anthropic_api_key": payload.anthropic_api_key,
+                "_openai_api_key":    payload.openai_api_key,
             }
             return {
                 "status":               "failed",

@@ -1,6 +1,9 @@
 import { useMemo, useRef } from 'react';
 import { AgGridReact } from 'ag-grid-react';
-import type { ColDef, ICellRendererParams, GridReadyEvent, RowClickedEvent } from 'ag-grid-community';
+import type {
+  ColDef, ICellRendererParams, GridReadyEvent, RowClickedEvent,
+  SelectionChangedEvent,
+} from 'ag-grid-community';
 import 'ag-grid-community/styles/ag-grid.css';
 import 'ag-grid-community/styles/ag-theme-alpine.css';
 import type { CandidateVideo } from '../types';
@@ -34,13 +37,25 @@ function statusBadgeCls(s: string): string {
 interface Props {
   rows: CandidateVideo[];
   selectedId: string | null;
-  onRowSelect: (v: CandidateVideo) => void;
+  onRowSelect:    (v: CandidateVideo) => void;
+  onCheckedChange?: (ids: string[]) => void;
 }
 
-export function CandidatesGrid({ rows, selectedId, onRowSelect }: Props) {
+export function CandidatesGrid({ rows, selectedId, onRowSelect, onCheckedChange }: Props) {
   const gridRef = useRef<AgGridReact>(null);
 
   const columnDefs = useMemo<ColDef<CandidateVideo>[]>(() => [
+    {
+      headerName: '',
+      width: 42,
+      maxWidth: 42,
+      pinned: 'left',
+      checkboxSelection: true,
+      headerCheckboxSelection: true,
+      headerCheckboxSelectionFilteredOnly: true,
+      sortable: false, filter: false, resizable: false,
+      suppressHeaderMenuButton: true,
+    },
     {
       headerName: 'Thumb',
       field: 'local_thumbnail_path',
@@ -156,6 +171,12 @@ export function CandidatesGrid({ rows, selectedId, onRowSelect }: Props) {
     if (e.data) onRowSelect(e.data);
   }
 
+  function onSelectionChanged(e: SelectionChangedEvent<CandidateVideo>) {
+    if (!onCheckedChange) return;
+    const ids = e.api.getSelectedRows().map(r => r.id);
+    onCheckedChange(ids);
+  }
+
   function getRowClass(params: any) {
     return params.data?.id === selectedId ? 'ag-row-selected-by-app' : '';
   }
@@ -179,6 +200,9 @@ export function CandidatesGrid({ rows, selectedId, onRowSelect }: Props) {
         getRowClass={getRowClass}
         onGridReady={onGridReady}
         onRowClicked={onRowClicked}
+        onSelectionChanged={onSelectionChanged}
+        rowSelection="multiple"
+        suppressRowClickSelection
         suppressCellFocus
       />
     </div>

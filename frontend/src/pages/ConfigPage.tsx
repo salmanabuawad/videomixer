@@ -15,6 +15,7 @@ export function ConfigPage() {
     youtube_api_key:      '',
     youtube_cookies_txt:  '',
     anthropic_api_key:    '',
+    openai_api_key:       '',
   });
   const [saving, setSaving] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
@@ -47,37 +48,61 @@ export function ConfigPage() {
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          {/* Anthropic LLM */}
+          {/* LLM keys (OpenAI preferred, Anthropic fallback) */}
           <div className="border border-theme-card-border rounded-xl p-4 lg:col-span-2">
-            <div className="flex items-center gap-2 mb-3">
+            <div className="flex items-center gap-2 mb-1">
               <Sparkles className="h-5 w-5 text-purple-600" />
-              <h3 className="font-semibold text-theme-text-primary">Anthropic (LLM analysis)</h3>
+              <h3 className="font-semibold text-theme-text-primary">LLM analysis keys</h3>
             </div>
             <p className="text-xs text-theme-text-muted mb-3">
-              When set, candidate analysis (summary / strengths / weaknesses) uses Anthropic Claude.
-              If left empty, a built-in heuristic analyzer is used instead.
+              The analyze / evaluate pipeline picks the first available engine in this order:
+              <strong> OpenAI → Anthropic → built-in heuristic</strong>.
+              Both keys are stored encrypted and are only sent to the worker at analyze time.
             </p>
-            <div className="space-y-3">
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="label-base">API Key</label>
+                <label className="label-base">OpenAI API Key</label>
+                <input type="password" value={form.openai_api_key}
+                       onChange={e => setForm({ ...form, openai_api_key: e.target.value })}
+                       className="input-base" placeholder="sk-… or sk-svcacct-…" autoComplete="off" />
+                <div className="flex items-center justify-between gap-3 mt-2">
+                  <button
+                    className="btn btn-md btn-primary"
+                    disabled={saving === 'openai'}
+                    onClick={() => void saveBatch(['openai_api_key'], 'openai')}
+                  >
+                    <Save className="h-4 w-4" />
+                    {saving === 'openai' ? 'Saving…' : 'Save OpenAI Key'}
+                  </button>
+                  {savedAt === 'openai' && (
+                    <span className="inline-flex items-center gap-1 text-sm text-emerald-600 font-medium">
+                      <CheckCircle2 className="h-4 w-4" /> Saved
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <label className="label-base">Anthropic API Key</label>
                 <input type="password" value={form.anthropic_api_key}
                        onChange={e => setForm({ ...form, anthropic_api_key: e.target.value })}
                        className="input-base" placeholder="sk-ant-…" autoComplete="off" />
-              </div>
-              <div className="flex items-center justify-between gap-3 pt-1">
-                <button
-                  className="btn btn-md btn-primary"
-                  disabled={saving === 'anthropic'}
-                  onClick={() => void saveBatch(['anthropic_api_key'], 'anthropic')}
-                >
-                  <Save className="h-4 w-4" />
-                  {saving === 'anthropic' ? 'Saving…' : 'Save Key'}
-                </button>
-                {savedAt === 'anthropic' && (
-                  <span className="inline-flex items-center gap-1 text-sm text-emerald-600 font-medium">
-                    <CheckCircle2 className="h-4 w-4" /> Saved
-                  </span>
-                )}
+                <div className="flex items-center justify-between gap-3 mt-2">
+                  <button
+                    className="btn btn-md btn-primary"
+                    disabled={saving === 'anthropic'}
+                    onClick={() => void saveBatch(['anthropic_api_key'], 'anthropic')}
+                  >
+                    <Save className="h-4 w-4" />
+                    {saving === 'anthropic' ? 'Saving…' : 'Save Anthropic Key'}
+                  </button>
+                  {savedAt === 'anthropic' && (
+                    <span className="inline-flex items-center gap-1 text-sm text-emerald-600 font-medium">
+                      <CheckCircle2 className="h-4 w-4" /> Saved
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
           </div>

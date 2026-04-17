@@ -20,7 +20,10 @@ function iso8601DurationToSeconds(iso) {
  *          thumbnailUrl:string,durationSec:number|null,description:string,
  *          publishedAt:string}>>}
  */
-export async function youtubeSearch({ apiKey, query, maxResults = 10, regionCode, relevanceLanguage }) {
+/**
+ * Returns { items: [...], nextPageToken: string|null }
+ */
+export async function youtubeSearch({ apiKey, query, maxResults = 10, regionCode, relevanceLanguage, pageToken }) {
   if (!apiKey) throw new Error('youtube api key required');
   const searchUrl = new URL(`${BASE}/search`);
   searchUrl.searchParams.set('key',        apiKey);
@@ -31,6 +34,7 @@ export async function youtubeSearch({ apiKey, query, maxResults = 10, regionCode
   searchUrl.searchParams.set('safeSearch', 'moderate');
   if (regionCode)         searchUrl.searchParams.set('regionCode',         regionCode);
   if (relevanceLanguage)  searchUrl.searchParams.set('relevanceLanguage',  relevanceLanguage);
+  if (pageToken)          searchUrl.searchParams.set('pageToken',          pageToken);
 
   const sr = await fetch(searchUrl);
   if (!sr.ok) {
@@ -39,7 +43,8 @@ export async function youtubeSearch({ apiKey, query, maxResults = 10, regionCode
   }
   const sd = await sr.json();
   const items = Array.isArray(sd.items) ? sd.items : [];
-  if (!items.length) return [];
+  const nextPageToken = sd.nextPageToken || null;
+  if (!items.length) return { items: [], nextPageToken };
 
   // Enrich with content details for duration
   const ids = items.map(i => i.id?.videoId).filter(Boolean);
@@ -58,7 +63,7 @@ export async function youtubeSearch({ apiKey, query, maxResults = 10, regionCode
     }
   }
 
-  return items.map((it, idx) => {
+  const mapped = items.map((it, idx) => {
     const vid   = it.id?.videoId;
     const snip  = it.snippet || {};
     const thumb = snip.thumbnails?.high?.url
@@ -78,4 +83,5 @@ export async function youtubeSearch({ apiKey, query, maxResults = 10, regionCode
       _rank:          idx,
     };
   }).filter(item => item.url);
+  return { items: mapped, nextPageToken };
 }

@@ -30,6 +30,10 @@ alter table projects add column if not exists project_type text not null default
 -- Optional ISO-639 language preference ('en', 'ar', 'fr', etc.); NULL = any language
 alter table projects add column if not exists preferred_language text;
 
+-- Pagination state for the last YouTube search (used by "Next 20 videos")
+alter table projects add column if not exists last_search_query       text;
+alter table projects add column if not exists last_search_page_token  text;
+
 create table if not exists candidate_videos (
   id uuid primary key default gen_random_uuid(),
   project_id uuid not null references projects(id) on delete cascade,

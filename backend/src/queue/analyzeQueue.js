@@ -49,7 +49,8 @@ async function processAnalyze({ candidateVideoId }) {
   );
 
   // Pull API keys / cookies from config table
-  const [anthropicKey, fbCookies, ytCookies] = await Promise.all([
+  const [openaiKey, anthropicKey, fbCookies, ytCookies] = await Promise.all([
+    readConfigValue('openai_api_key'),
     readConfigValue('anthropic_api_key'),
     readConfigValue('facebook_cookies_txt'),
     readConfigValue('youtube_cookies_txt'),
@@ -68,8 +69,9 @@ async function processAnalyze({ candidateVideoId }) {
     description:  cand.description,
     duration_sec: cand.duration_sec,
     domain_tags:  cand.domain_tags || {},
-    cookies_txt:  cookiesTxt,
+    cookies_txt:       cookiesTxt,
     anthropic_api_key: anthropicKey || null,
+    openai_api_key:    openaiKey    || null,
   };
 
   let result;
