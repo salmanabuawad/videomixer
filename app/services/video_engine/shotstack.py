@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import time
+import urllib.error
 import urllib.request
 from typing import Any
 
@@ -47,6 +48,14 @@ def _local_path_to_public_url(local_path: str) -> str:
     return f"{base}/{rel}"
 
 
+def _read_error_body(exc: urllib.error.HTTPError) -> str:
+    try:
+        body = exc.read().decode("utf-8", errors="replace").strip()
+    except Exception:
+        body = ""
+    return body[:2000]
+
+
 def _post_json(url: str, payload: dict) -> dict[str, Any]:
     data = json.dumps(payload).encode("utf-8")
     key = shotstack_api_key_resolved()
@@ -59,15 +68,31 @@ def _post_json(url: str, payload: dict) -> dict[str, Any]:
         },
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        return json.loads(resp.read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            return json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        body = _read_error_body(e)
+        logger.error(
+            "Shotstack POST %s failed %s: %s\nPayload: %s",
+            url,
+            e.code,
+            body,
+            json.dumps(payload)[:2000],
+        )
+        raise ValueError(f"Shotstack {e.code} {e.reason}: {body}") from e
 
 
 def _get_json(url: str) -> dict[str, Any]:
     key = shotstack_api_key_resolved()
     req = urllib.request.Request(url, headers={"x-api-key": key})
-    with urllib.request.urlopen(req, timeout=60) as resp:
-        return json.loads(resp.read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        body = _read_error_body(e)
+        logger.error("Shotstack GET %s failed %s: %s", url, e.code, body)
+        raise ValueError(f"Shotstack {e.code} {e.reason}: {body}") from e
 
 
 def _download(url: str, dest: str) -> None:
