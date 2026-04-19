@@ -102,47 +102,140 @@ def _download(url: str, dest: str) -> None:
     urllib.request.urlretrieve(url, dest)
 
 
+_VALID_TRANSITIONS = {"fade", "slideLeft", "slideRight", "slideUp", "slideDown", "zoom"}
+
+
+def _trim_or_zero(scene: dict) -> float:
+    for key in ("trim_sec", "start_sec", "trim"):
+        if key in scene and scene[key] is not None:
+            try:
+                return max(0.0, float(scene[key]))
+            except (TypeError, ValueError):
+                continue
+    return 0.0
+
+
+def _scene_transitions(scene: dict) -> dict[str, str]:
+    out: dict[str, str] = {}
+    t_in = str(scene.get("transition_in") or "").strip()
+    t_out = str(scene.get("transition_out") or "").strip()
+    if t_in in _VALID_TRANSITIONS:
+        out["in"] = t_in
+    if t_out in _VALID_TRANSITIONS:
+        out["out"] = t_out
+    return out
+
+
+def _build_video_clip(
+    scene: dict,
+    src: str,
+    start: float,
+    length: float,
+    *,
+    fit: str,
+    filter_: str = "",
+) -> dict[str, Any]:
+    asset_dict: dict[str, Any] = {"type": "video", "src": src}
+    trim = _trim_or_zero(scene)
+    if trim > 0:
+        asset_dict["trim"] = trim
+    clip: dict[str, Any] = {
+        "asset": asset_dict,
+        "start": start,
+        "length": length,
+        "fit": fit,
+    }
+    if filter_:
+        clip["filter"] = filter_
+    trans = _scene_transitions(scene)
+    if trans:
+        clip["transition"] = trans
+    return clip
+
+
+def _title_track_clips(scene: dict, start: float, length: float) -> list[dict[str, Any]]:
+    clips: list[dict[str, Any]] = []
+    title = str(scene.get("title") or "").strip()
+    subtitle = str(scene.get("subtitle") or "").strip()
+    if title:
+        clips.append(
+            {
+                "asset": {
+                    "type": "title",
+                    "text": title[:120],
+                    "style": "minimal",
+                    "color": "#ffffff",
+                    "size": "medium",
+                    "position": "top",
+                },
+                "start": start,
+                "length": length,
+                "transition": {"in": "fade", "out": "fade"},
+            }
+        )
+    if subtitle:
+        clips.append(
+            {
+                "asset": {
+                    "type": "title",
+                    "text": subtitle[:160],
+                    "style": "minimal",
+                    "color": "#ffffff",
+                    "size": "small",
+                    "position": "bottom",
+                },
+                "start": start,
+                "length": length,
+                "transition": {"in": "fade", "out": "fade"},
+            }
+        )
+    return clips
+
+
 def _build_timeline(plan: dict) -> dict[str, Any]:
     scenes = plan.get("scenes") or []
-    clips: list[dict[str, Any]] = []
+    hero_treatment = plan.get("hero_treatment") or {}
+    hero_asset = str(hero_treatment.get("asset") or "").strip()
+    composition = str(hero_treatment.get("composition") or "").strip()
+    default_layered = composition == "layered_narrow"
+
+    fg_clips: list[dict[str, Any]] = []
+    bg_clips: list[dict[str, Any]] = []
+    title_clips: list[dict[str, Any]] = []
     timeline_pos = 0.0
+
     for scene in scenes:
         asset_path = scene["asset"]
         src = _local_path_to_public_url(asset_path)
         dur = float(scene["duration_sec"])
-        trim = float(scene.get("start_sec", 0))
-        asset_dict: dict[str, Any] = {"type": "video", "src": src}
-        if trim > 0:
-            asset_dict["trim"] = trim
-        clips.append(
-            {
-                "asset": asset_dict,
-                "start": timeline_pos,
-                "length": dur,
-            }
+        use_layered = bool(scene.get("use_layered_hero")) or (
+            default_layered and asset_path == hero_asset
         )
+
+        if use_layered:
+            bg_clips.append(
+                _build_video_clip(
+                    scene, src, timeline_pos, dur, fit="cover", filter_="darken"
+                )
+            )
+            fg_clips.append(
+                _build_video_clip(scene, src, timeline_pos, dur, fit="contain")
+            )
+        else:
+            fg_clips.append(
+                _build_video_clip(scene, src, timeline_pos, dur, fit="cover")
+            )
+
+        title_clips.extend(_title_track_clips(scene, timeline_pos, dur))
         timeline_pos += dur
 
-    title = str(plan.get("title_overlay") or "").strip()
-    tracks: list[dict[str, Any]] = [{"clips": clips}]
-    if title:
-        tracks.append(
-            {
-                "clips": [
-                    {
-                        "asset": {
-                            "type": "title",
-                            "text": title[:120],
-                            "style": "minimal",
-                            "color": "#ffffff",
-                            "size": "medium",
-                        },
-                        "start": 0,
-                        "length": min(5.0, timeline_pos),
-                    }
-                ]
-            }
-        )
+    # Shotstack renders track index 0 on top. Titles > foreground > background.
+    tracks: list[dict[str, Any]] = []
+    if title_clips:
+        tracks.append({"clips": title_clips})
+    tracks.append({"clips": fg_clips})
+    if bg_clips:
+        tracks.append({"clips": bg_clips})
 
     return {"timeline": {"background": "#000000", "tracks": tracks}}
 

@@ -25,6 +25,7 @@ from app.schemas import (
     RenderJobOut,
     ShotstackConfigIn,
 )
+from app.services.asset_analysis import probe_video
 from app.services.extract import extract_text_from_file
 from app.services.openai_service import build_render_plan, extract_knowledge, revise_render_plan
 from app.config import CONFIG_ADMIN_TOKEN, RENDER_DIR, UPLOAD_DIR
@@ -130,12 +131,61 @@ def _render_worker(job_id: int, plan: dict) -> None:
         )
 
 
-def _project_asset_lists(session: Session, project_id: int) -> tuple[list[str], list[str]]:
-    assets = session.exec(select(Asset).where(Asset.project_id == project_id)).all()
-    videos = [a.file_path for a in assets if a.asset_type == "video"]
+def _asset_meta_dict(asset: Asset) -> dict:
+    d: dict = {
+        "file_path": asset.file_path,
+        "file_name": asset.file_name,
+    }
+    if asset.duration_sec:
+        d["duration_sec"] = round(float(asset.duration_sec), 2)
+    if asset.width and asset.height:
+        d["width"] = asset.width
+        d["height"] = asset.height
+        d["aspect_ratio"] = round(asset.width / asset.height, 4)
+        d["is_narrow"] = (asset.width / asset.height) < 0.75
+    if asset.duration_sec:
+        d["is_short"] = float(asset.duration_sec) < 10
+    return d
+
+
+def _backfill_asset_metadata(session: Session, asset: Asset) -> None:
+    """Older rows may have been uploaded before ffprobe was wired in — fill on demand."""
+    if asset.asset_type != "video" or (asset.width and asset.height):
+        return
+    if not os.path.exists(asset.file_path):
+        return
+    meta = probe_video(asset.file_path)
+    if not meta:
+        return
+    asset.width = int(meta.get("width") or 0)
+    asset.height = int(meta.get("height") or 0)
+    asset.duration_sec = float(meta.get("duration_sec") or 0.0)
+    asset.fps = float(meta.get("fps") or 0.0)
+    asset.metadata_json = json.dumps(
+        {k: v for k, v in meta.items() if k != "raw"}, ensure_ascii=False
+    )
+    session.add(asset)
+    session.commit()
+
+
+def _project_asset_lists(
+    session: Session, project_id: int
+) -> tuple[list[dict], list[dict]]:
+    """Return (hero[s], support[s]) as richly-described asset dicts.
+
+    Hero is the first video asset (oldest upload). Caller can use file_path
+    for engine, or pass the full dict context to the planner.
+    """
+    assets = session.exec(
+        select(Asset).where(Asset.project_id == project_id).order_by(Asset.id.asc())
+    ).all()
+    videos = [a for a in assets if a.asset_type == "video"]
     if not videos:
         raise HTTPException(status_code=400, detail="Upload at least one video")
-    return videos[:1], videos[1:]
+    for v in videos:
+        _backfill_asset_metadata(session, v)
+    metas = [_asset_meta_dict(a) for a in videos]
+    return metas[:1], metas[1:]
 
 
 def _knowledge_dict_for(session: Session, project_id: int) -> dict:
@@ -344,15 +394,25 @@ async def upload_assets(
         with open(target, "wb") as f:
             f.write(data)
         asset_type = "video" if (file.content_type or "").startswith("video/") else "document"
-        session.add(
-            Asset(
-                project_id=project_id,
-                asset_type=asset_type,
-                file_name=safe_name,
-                file_path=target,
-                mime_type=file.content_type or "",
-            )
+        asset = Asset(
+            project_id=project_id,
+            asset_type=asset_type,
+            file_name=safe_name,
+            file_path=target,
+            mime_type=file.content_type or "",
         )
+        if asset_type == "video":
+            meta = probe_video(target)
+            if meta:
+                asset.width = meta.get("width") or 0
+                asset.height = meta.get("height") or 0
+                asset.duration_sec = float(meta.get("duration_sec") or 0.0)
+                asset.fps = float(meta.get("fps") or 0.0)
+                asset.metadata_json = json.dumps(
+                    {k: v for k, v in meta.items() if k != "raw"},
+                    ensure_ascii=False,
+                )
+        session.add(asset)
     session.commit()
     return {"ok": True, "uploaded": len(files)}
 

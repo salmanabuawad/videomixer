@@ -133,11 +133,25 @@ export function ProjectPage() {
           </form>
           <h4>Assets</h4>
           <ul>
-            {assets.map((a) => (
-              <li key={a.id}>
-                {a.asset_type} — {a.file_name}
-              </li>
-            ))}
+            {assets.map((a) => {
+              const isVideo = a.asset_type === "video";
+              const aspect = isVideo && a.width && a.height ? a.width / a.height : 0;
+              const narrow = aspect > 0 && aspect < 0.75;
+              const short = isVideo && a.duration_sec > 0 && a.duration_sec < 10;
+              return (
+                <li key={a.id} style={{ marginBottom: 4 }}>
+                  {a.asset_type} — {a.file_name}
+                  {isVideo && a.width > 0 && (
+                    <span style={{ color: "#57606a", fontSize: "0.85rem" }}>
+                      {" "}
+                      — {a.width}×{a.height} · {a.duration_sec.toFixed(1)}s · {a.fps.toFixed(1)}fps
+                      {narrow && <span style={{ color: "#b54708" }}> · narrow</span>}
+                      {short && <span style={{ color: "#b54708" }}> · short</span>}
+                    </span>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         </div>
 

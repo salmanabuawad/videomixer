@@ -11,6 +11,10 @@ export type Asset = {
   asset_type: string;
   file_name: string;
   mime_type: string;
+  width: number;
+  height: number;
+  duration_sec: number;
+  fps: number;
   created_at: string;
 };
 

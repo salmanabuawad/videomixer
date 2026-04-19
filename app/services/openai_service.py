@@ -94,19 +94,66 @@ Source material:
     return _chat_json(SYSTEM_PROMPT, user)
 
 
+_PLAN_SCHEMA_DOC = """Return JSON with this exact schema:
+
+{
+  "aspect_ratio": "9:16",
+  "total_duration_sec": <number, 55–70>,
+  "hero_treatment": {
+    "asset": "<one file_path from main assets>",
+    "is_narrow": <bool>,            // same flag as the asset metadata
+    "is_short": <bool>,
+    "composition": "centered" | "layered_narrow" | "full_frame",
+    "notes": "<one short sentence describing how the hero is framed>"
+  },
+  "voiceover_script": "<ONE continuous narration paragraph, 150–280 words, matches total duration read aloud at marketing pace. No stage directions.>",
+  "music_cue": "<short style tag, e.g. 'upbeat-corporate'>",
+  "scenes": [
+    {
+      "role": "hook" | "problem" | "intro" | "spray" | "mix" | "compact" | "advantage" | "proof" | "cta",
+      "asset": "<one file_path from main or support>",
+      "trim_sec": <number>,          // where to start in the source clip
+      "duration_sec": <number>,      // on-screen length for this scene
+      "title": "<≤6 words, empty string if none>",
+      "subtitle": "<≤10 words, empty string if none>",
+      "transition_in": "fade" | "slideLeft" | "slideRight" | "zoom" | "",
+      "transition_out": "fade" | "slideLeft" | "slideRight" | "zoom" | "",
+      "use_layered_hero": <bool>     // if true: the builder will render this scene with a blurred/darkened full-frame background plus the clip centered on top
+    }
+  ]
+}
+
+Rules:
+- Every `asset` MUST be a file_path that appears verbatim in main_assets or support_assets below.
+- `hero_treatment.composition` = "layered_narrow" when the hero asset has is_narrow=true — this tells the renderer to build a 9:16 background by scaling+cropping+darkening the same clip, with the original centered on top (never stretch a narrow clip).
+- `scenes[].use_layered_hero` = true when that scene uses the narrow hero and you want the layered composition for that scene.
+- Sum of scene.duration_sec must be within ±2s of total_duration_sec.
+- Keep titles punchy (≤6 words) and grounded in the supplied knowledge — no invented claims.
+- Narrative arc: hook → context/problem → solution (spray/mix/compact if process_steps match) → proof → CTA."""
+
+
+def _format_assets(label: str, assets: list) -> str:
+    if not assets:
+        return f"{label}: (none)"
+    if assets and isinstance(assets[0], dict):
+        return f"{label} (with metadata):\n{json.dumps(assets, ensure_ascii=False, indent=2)}"
+    return f"{label}: {assets}"
+
+
 def revise_render_plan(
     previous_plan: dict[str, Any],
     enhancement_request: str,
     knowledge: dict[str, Any],
-    main_assets: list[str],
-    support_assets: list[str],
+    main_assets: list,
+    support_assets: list,
 ) -> dict[str, Any]:
-    user = f"""Revise the following render plan based on the user's feedback. Return the FULL revised plan JSON in the same schema (aspect_ratio, total_duration_sec, scenes[] with role/asset/start_sec/duration_sec/title/subtitle, voiceover_script). Do NOT return a diff.
+    user = f"""Revise the following render plan based on the user's feedback. Return the FULL revised plan JSON in the same schema below. Do NOT return a diff.
 
-Rules:
-- Only use asset paths that appear in the main or support lists below.
+{_PLAN_SCHEMA_DOC}
+
+Rules specific to revision:
+- Only use asset file_paths that appear in the lists below.
 - Keep the hero asset dominant unless the user explicitly asks to reduce it.
-- Preserve coherent narrative arc: hook → context → problem → solution → proof → CTA.
 - If the user asks for pacing changes, adjust duration_sec and total_duration_sec consistently.
 - If the user asks for new copy, update title/subtitle/voiceover_script accordingly.
 
@@ -119,47 +166,27 @@ Previous plan:
 Knowledge (for grounding claims):
 {json.dumps(knowledge, ensure_ascii=False)}
 
-Main assets:
-{main_assets}
+{_format_assets("Main assets", main_assets)}
 
-Support assets:
-{support_assets}
+{_format_assets("Support assets", support_assets)}
 """
     return _chat_json(SYSTEM_PROMPT, user)
 
 
 def build_render_plan(
-    knowledge: dict[str, Any], main_assets: list[str], support_assets: list[str]
+    knowledge: dict[str, Any], main_assets: list, support_assets: list
 ) -> dict[str, Any]:
-    user = f"""Create a JSON render plan for a **vertical 9:16** marketing video (~55–70 seconds total).
+    user = f"""You are planning a vertical 9:16 marketing video (~55–70 seconds) for Zym-Tec.
 
-Story rules:
-- Tell a **complete story**: hook → context → problem → solution → proof → call-to-action.
-- Use the **main (hero) asset** for the majority of screen time; support clips for B-roll or reinforcement only.
-- Every scene must advance the narrative (no random clips).
-- On-screen title/subtitle text must be short (≤8 words per line).
+Before planning, **study all the material provided** — both the uploaded document knowledge and the per-asset metadata below (duration, dimensions, is_narrow, is_short). Your plan must be grounded in this source material and must respect the physical properties of the uploaded clips (e.g. do not schedule 15s from a 6-second clip; do not stretch a narrow clip to fill the frame — use the layered composition instead).
 
-Voiceover:
-- **voiceover_script**: ONE continuous narration paragraph (150–280 words) that matches the scene order and total duration (~55–70s when read aloud at a clear marketing pace). It must sound like one cohesive ad, not bullet points. No stage directions — spoken words only.
+{_PLAN_SCHEMA_DOC}
 
-Technical JSON shape:
-- aspect_ratio: "9:16"
-- total_duration_sec: number (55–70), sum of scene durations must match within ~2s.
-- scenes: array of 6–10 scenes. Each scene object MUST have:
-  - role: "hero" | "support" | "title"
-  - asset: EXACTLY one of the file paths from main or support lists below
-  - start_sec: where to trim inside that file (>=0)
-  - duration_sec: length of this scene (>=2, sum ≈ total_duration_sec)
-  - title: short on-screen headline (can be empty for pure footage)
-  - subtitle: supporting line (can be empty)
-
-Knowledge (use for messaging only; asset paths come from the lists below):
+Knowledge (study this for summary, process steps, claims, benefits, narrative arc):
 {json.dumps(knowledge, ensure_ascii=False)}
 
-Main assets (hero — use index 0 most):
-{main_assets}
+{_format_assets("Main assets (hero — use index 0 most)", main_assets)}
 
-Support assets:
-{support_assets}
+{_format_assets("Support assets", support_assets)}
 """
     return _chat_json(SYSTEM_PROMPT, user)

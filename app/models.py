@@ -16,6 +16,11 @@ class Asset(SQLModel, table=True):
     file_name: str
     file_path: str
     mime_type: str = ""
+    width: int = 0
+    height: int = 0
+    duration_sec: float = 0.0
+    fps: float = 0.0
+    metadata_json: str = ""
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 class Knowledge(SQLModel, table=True):

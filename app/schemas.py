@@ -44,6 +44,10 @@ class AssetOut(BaseModel):
     asset_type: str
     file_name: str
     mime_type: str = ""
+    width: int = 0
+    height: int = 0
+    duration_sec: float = 0.0
+    fps: float = 0.0
     created_at: datetime
 
 

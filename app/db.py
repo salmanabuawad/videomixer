@@ -23,17 +23,25 @@ _RENDER_JOB_COLUMN_DDL = {
     "updated_at": "ALTER TABLE renderjob ADD COLUMN updated_at DATETIME",
 }
 
+_ASSET_COLUMN_DDL = {
+    "width": "ALTER TABLE asset ADD COLUMN width INTEGER DEFAULT 0",
+    "height": "ALTER TABLE asset ADD COLUMN height INTEGER DEFAULT 0",
+    "duration_sec": "ALTER TABLE asset ADD COLUMN duration_sec REAL DEFAULT 0",
+    "fps": "ALTER TABLE asset ADD COLUMN fps REAL DEFAULT 0",
+    "metadata_json": "ALTER TABLE asset ADD COLUMN metadata_json TEXT DEFAULT ''",
+}
 
-def _ensure_render_job_columns() -> None:
+
+def _ensure_columns(table: str, ddl_map: dict[str, str]) -> None:
     insp = inspect(engine)
-    if "renderjob" not in insp.get_table_names():
+    if table not in insp.get_table_names():
         return
-    cols = {c["name"] for c in insp.get_columns("renderjob")}
-    missing = [(name, ddl) for name, ddl in _RENDER_JOB_COLUMN_DDL.items() if name not in cols]
+    cols = {c["name"] for c in insp.get_columns(table)}
+    missing = [ddl for name, ddl in ddl_map.items() if name not in cols]
     if not missing:
         return
     with engine.begin() as conn:
-        for _, ddl in missing:
+        for ddl in missing:
             conn.execute(text(ddl))
 
 
@@ -42,7 +50,8 @@ def init_db():
     from app import models  # noqa: F401
 
     SQLModel.metadata.create_all(engine)
-    _ensure_render_job_columns()
+    _ensure_columns("renderjob", _RENDER_JOB_COLUMN_DDL)
+    _ensure_columns("asset", _ASSET_COLUMN_DDL)
 
 
 def get_session():

@@ -158,7 +158,11 @@ def render_plan(project_id: int, plan: dict, render_root: str) -> str:
         title = str(scene.get("title", "") or "")
         subtitle = str(scene.get("subtitle", "") or "")
         duration = float(scene["duration_sec"])
-        requested_start = float(scene.get("start_sec", 0))
+        requested_start = float(
+            scene.get("start_sec")
+            if scene.get("start_sec") is not None
+            else (scene.get("trim_sec") or 0)
+        )
         asset_dur = _duration(asset)
         start = _best_start(asset_dur, requested_start, duration)
         seg_out = os.path.abspath(os.path.join(temp_dir, f"seg_{idx}.mp4"))
