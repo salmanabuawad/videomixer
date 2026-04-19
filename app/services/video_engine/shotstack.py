@@ -109,12 +109,14 @@ def _build_timeline(plan: dict) -> dict[str, Any]:
         src = _local_path_to_public_url(asset_path)
         dur = float(scene["duration_sec"])
         trim = float(scene.get("start_sec", 0))
+        asset_dict: dict[str, Any] = {"type": "video", "src": src}
+        if trim > 0:
+            asset_dict["trim"] = trim
         clips.append(
             {
-                "asset": {"type": "video", "src": src},
+                "asset": asset_dict,
                 "start": timeline_pos,
                 "length": dur,
-                "trim": trim,
             }
         )
         timeline_pos += dur
