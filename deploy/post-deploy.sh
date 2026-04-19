@@ -4,6 +4,13 @@ set -euo pipefail
 APP_ROOT="${APP_ROOT:-/opt/zymtech_innovation}"
 cd "$APP_ROOT"
 
+# Windows→Linux deploy hygiene: CRLF-strip shell/service/nginx configs and
+# restore www-data ownership (tar extract as root otherwise keeps the builder's UID).
+find . -type f \( -name '*.sh' -o -name '*.service' -o -name '*.conf' \) \
+  -not -path './.venv/*' -not -path './frontend/node_modules/*' \
+  -print0 | xargs -0 -r sed -i 's/\r$//'
+sudo chown -R www-data:www-data "$APP_ROOT"
+
 if [[ ! -f .venv/bin/activate ]]; then
   python3.11 -m venv .venv 2>/dev/null || python3 -m venv .venv
 fi
