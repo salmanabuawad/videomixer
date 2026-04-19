@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
+from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from sqlmodel import Session, select
 
-from app.db import get_session
+from app.db import engine as db_engine, get_session
+
+logger = logging.getLogger(__name__)
 from app.models import Asset, Knowledge, Project, RenderJob
 from app.schemas import (
     AssetOut,
@@ -72,11 +76,58 @@ def _job_to_out(job: RenderJob) -> RenderJobOut:
         output_path=job.output_path or "",
         error_text=job.error_text or "",
         render_engine=getattr(job, "render_engine", None) or "",
+        stage=getattr(job, "stage", None) or "",
+        progress_message=getattr(job, "progress_message", None) or "",
         parent_job_id=getattr(job, "parent_job_id", None),
         enhancement_request=getattr(job, "enhancement_request", None) or "",
         created_at=job.created_at,
+        updated_at=getattr(job, "updated_at", None) or job.created_at,
         download_url=dl,
     )
+
+
+def _update_job(job_id: int, **fields) -> None:
+    with Session(db_engine) as s:
+        row = s.get(RenderJob, job_id)
+        if row is None:
+            return
+        for k, v in fields.items():
+            setattr(row, k, v)
+        row.updated_at = datetime.utcnow()
+        s.add(row)
+        s.commit()
+
+
+def _render_worker(job_id: int, plan: dict) -> None:
+    """Runs in a background thread — updates the job row as stages progress."""
+
+    def report(stage: str, message: str) -> None:
+        _update_job(job_id, stage=stage, progress_message=message)
+
+    try:
+        with Session(db_engine) as s:
+            row = s.get(RenderJob, job_id)
+            if row is None:
+                return
+            project_id = row.project_id
+        _update_job(job_id, status="running", stage="rendering", progress_message="Starting render…")
+        output_path = produce_final_video(project_id, plan, RENDER_DIR, progress=report)
+        _update_job(
+            job_id,
+            status="done",
+            stage="done",
+            progress_message="Render complete.",
+            output_path=output_path,
+        )
+    except Exception as e:
+        logger.exception("render worker failed for job %s", job_id)
+        _update_job(
+            job_id,
+            status="failed",
+            stage="failed",
+            progress_message="Render failed — see error.",
+            error_text=str(e),
+        )
 
 
 def _project_asset_lists(session: Session, project_id: int) -> tuple[list[str], list[str]]:
@@ -101,18 +152,23 @@ def _knowledge_dict_for(session: Session, project_id: int) -> dict:
     }
 
 
-def _execute_render(
+def _queue_render(
     session: Session,
+    background_tasks: BackgroundTasks,
     project_id: int,
     plan: dict,
     *,
     parent_job_id: Optional[int] = None,
     enhancement_request: str = "",
+    initial_stage: str = "queued",
+    initial_message: str = "Queued.",
 ) -> RenderJob:
     engine_name = video_engine()
     job = RenderJob(
         project_id=project_id,
-        status="running",
+        status="queued",
+        stage=initial_stage,
+        progress_message=initial_message,
         render_engine=engine_name,
         parent_job_id=parent_job_id,
         enhancement_request=enhancement_request,
@@ -121,16 +177,7 @@ def _execute_render(
     session.add(job)
     session.commit()
     session.refresh(job)
-    try:
-        output_path = produce_final_video(project_id, plan, RENDER_DIR)
-        job.status = "done"
-        job.output_path = output_path
-    except Exception as e:
-        job.status = "failed"
-        job.error_text = str(e)
-    session.add(job)
-    session.commit()
-    session.refresh(job)
+    background_tasks.add_task(_render_worker, job.id, plan)
     return job
 
 
@@ -347,7 +394,11 @@ def extract_project_knowledge(project_id: int, session: Session = Depends(get_se
 
 
 @router.post("/projects/{project_id}/render")
-def render_project(project_id: int, session: Session = Depends(get_session)):
+def render_project(
+    project_id: int,
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(get_session),
+):
     project = session.get(Project, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -357,12 +408,24 @@ def render_project(project_id: int, session: Session = Depends(get_session)):
         plan = build_render_plan(knowledge_dict, main_assets, support_assets)
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
-    job = _execute_render(session, project_id, plan)
+    job = _queue_render(
+        session,
+        background_tasks,
+        project_id,
+        plan,
+        initial_stage="queued",
+        initial_message="Plan ready. Submitting render…",
+    )
     return {"ok": True, "job": _job_to_out(job)}
 
 
 @router.post("/jobs/{job_id}/enhance")
-def enhance_job(job_id: int, body: EnhanceJobIn, session: Session = Depends(get_session)):
+def enhance_job(
+    job_id: int,
+    body: EnhanceJobIn,
+    background_tasks: BackgroundTasks,
+    session: Session = Depends(get_session),
+):
     request_text = (body.request or "").strip()
     if not request_text:
         raise HTTPException(status_code=400, detail="Improvement request is required")
@@ -388,13 +451,24 @@ def enhance_job(job_id: int, body: EnhanceJobIn, session: Session = Depends(get_
         )
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
-    job = _execute_render(
+    job = _queue_render(
         session,
+        background_tasks,
         parent.project_id,
         new_plan,
         parent_job_id=parent.id,
         enhancement_request=request_text,
+        initial_stage="queued",
+        initial_message="Revised plan ready. Submitting render…",
     )
+    return {"ok": True, "job": _job_to_out(job)}
+
+
+@router.get("/jobs/{job_id}")
+def get_job(job_id: int, session: Session = Depends(get_session)):
+    job = session.get(RenderJob, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
     return {"ok": True, "job": _job_to_out(job)}
 
 

@@ -14,7 +14,9 @@ import os
 import time
 import urllib.error
 import urllib.request
-from typing import Any
+from typing import Any, Callable, Optional
+
+ProgressCallback = Optional[Callable[[str, str], None]]
 
 from app.config import UPLOAD_DIR
 from app.config_store import (
@@ -145,11 +147,34 @@ def _build_timeline(plan: dict) -> dict[str, Any]:
     return {"timeline": {"background": "#000000", "tracks": tracks}}
 
 
-def render_via_shotstack(project_id: int, plan: dict, render_root: str) -> str:
+_SHOTSTACK_STAGE_MESSAGES = {
+    "queued": "Shotstack queued your render.",
+    "fetching": "Shotstack is fetching the source clips.",
+    "rendering": "Shotstack is rendering the video.",
+    "saving": "Shotstack is saving the final file.",
+}
+
+
+def _report(cb: ProgressCallback, stage: str, message: str) -> None:
+    if cb is None:
+        return
+    try:
+        cb(stage, message)
+    except Exception:
+        logger.exception("progress callback raised; continuing render")
+
+
+def render_via_shotstack(
+    project_id: int,
+    plan: dict,
+    render_root: str,
+    progress: ProgressCallback = None,
+) -> str:
     _require_config()
     env = (shotstack_api_env_resolved() or "stage").strip()
     base_api = f"https://api.shotstack.io/edit/{env}"
 
+    _report(progress, "submitting", "Submitting render to Shotstack…")
     timeline_payload = _build_timeline(plan)
     body = {
         **timeline_payload,
@@ -172,10 +197,17 @@ def render_via_shotstack(project_id: int, plan: dict, render_root: str) -> str:
     status_url = f"{base_api}/render/{render_id}"
     deadline = time.time() + 900
     output_url = None
+    last_reported_status = ""
     while time.time() < deadline:
         st = _get_json(status_url)
         response = st.get("response", st)
         status = (response.get("status") or "").lower()
+        if status and status != last_reported_status:
+            msg = _SHOTSTACK_STAGE_MESSAGES.get(
+                status, f"Shotstack status: {status}"
+            )
+            _report(progress, status, msg)
+            last_reported_status = status
         if status in ("done", "complete", "finished"):
             output_url = response.get("url")
             break
@@ -186,6 +218,7 @@ def render_via_shotstack(project_id: int, plan: dict, render_root: str) -> str:
     if not output_url:
         raise TimeoutError("Shotstack render timed out")
 
+    _report(progress, "downloading", "Downloading rendered file…")
     out_dir = os.path.join(render_root, str(project_id))
     os.makedirs(out_dir, exist_ok=True)
     final_path = os.path.abspath(os.path.join(out_dir, "final.mp4"))

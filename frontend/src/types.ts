@@ -31,9 +31,12 @@ export type RenderJob = {
   error_text: string;
   /** "local" | "shotstack" — empty on jobs created before this field existed */
   render_engine: string;
+  stage: string;
+  progress_message: string;
   parent_job_id: number | null;
   enhancement_request: string;
   created_at: string;
+  updated_at: string | null;
   download_url: string | null;
 };
 

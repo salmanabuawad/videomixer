@@ -65,9 +65,12 @@ class RenderJobOut(BaseModel):
     output_path: str = ""
     error_text: str = ""
     render_engine: str = ""
+    stage: str = ""
+    progress_message: str = ""
     parent_job_id: Optional[int] = None
     enhancement_request: str = ""
     created_at: datetime
+    updated_at: Optional[datetime] = None
     download_url: Optional[str] = None
 
 

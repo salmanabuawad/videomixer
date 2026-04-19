@@ -1,4 +1,4 @@
-import type { Project, ProjectDetail } from "./types";
+import type { Project, ProjectDetail, RenderJob } from "./types";
 
 const apiBase = () => (import.meta.env.VITE_API_BASE ?? "").replace(/\/$/, "");
 
@@ -71,6 +71,11 @@ export async function enhanceJob(jobId: number, requestText: string): Promise<vo
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ request: requestText }),
   });
+}
+
+export async function fetchJob(jobId: number): Promise<RenderJob> {
+  const res = await request<{ ok: boolean; job: RenderJob }>(`/api/jobs/${jobId}`);
+  return res.job;
 }
 
 export function downloadJobUrl(jobId: number): string {

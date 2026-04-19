@@ -18,6 +18,9 @@ _RENDER_JOB_COLUMN_DDL = {
     "parent_job_id": "ALTER TABLE renderjob ADD COLUMN parent_job_id INTEGER",
     "enhancement_request": "ALTER TABLE renderjob ADD COLUMN enhancement_request TEXT DEFAULT ''",
     "render_plan_json": "ALTER TABLE renderjob ADD COLUMN render_plan_json TEXT DEFAULT ''",
+    "stage": "ALTER TABLE renderjob ADD COLUMN stage VARCHAR(32) DEFAULT ''",
+    "progress_message": "ALTER TABLE renderjob ADD COLUMN progress_message TEXT DEFAULT ''",
+    "updated_at": "ALTER TABLE renderjob ADD COLUMN updated_at DATETIME",
 }
 
 

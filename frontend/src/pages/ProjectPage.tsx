@@ -31,6 +31,19 @@ export function ProjectPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
+  const hasActiveJob = !!data?.jobs.some(
+    (j) => j.status === "queued" || j.status === "running",
+  );
+
+  useEffect(() => {
+    if (!hasActiveJob) return;
+    const tick = setInterval(() => {
+      load();
+    }, 2000);
+    return () => clearInterval(tick);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasActiveJob, projectId]);
+
   async function onUpload(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const form = e.currentTarget;
@@ -180,7 +193,9 @@ export function ProjectPage() {
           <p>No jobs yet.</p>
         ) : (
           <ul>
-            {jobs.map((j) => (
+            {jobs.map((j) => {
+              const active = j.status === "queued" || j.status === "running";
+              return (
               <li key={j.id} style={{ marginBottom: 12 }}>
                 Job {j.id} — {j.status}
                 {j.render_engine ? ` — ${j.render_engine}` : ""}
@@ -198,6 +213,33 @@ export function ProjectPage() {
                   <p style={{ margin: "4px 0", color: "#57606a", fontSize: "0.9rem" }}>
                     <em>Request:</em> {j.enhancement_request}
                   </p>
+                )}
+                {active && (
+                  <div
+                    style={{
+                      marginTop: 4,
+                      padding: "6px 10px",
+                      background: "#eef4ff",
+                      border: "1px solid #b6d4fe",
+                      borderRadius: 8,
+                      fontSize: "0.9rem",
+                    }}
+                  >
+                    <strong>{j.stage || "working"}</strong>
+                    {j.progress_message && <> — {j.progress_message}</>}
+                    <span
+                      aria-hidden
+                      style={{
+                        display: "inline-block",
+                        marginLeft: 8,
+                        width: 10,
+                        height: 10,
+                        borderRadius: "50%",
+                        background: "#0969da",
+                        animation: "pulse 1.2s ease-in-out infinite",
+                      }}
+                    />
+                  </div>
                 )}
                 {j.error_text && <pre className="error json">{j.error_text}</pre>}
                 {j.status === "done" && (
@@ -224,7 +266,8 @@ export function ProjectPage() {
                   </div>
                 )}
               </li>
-            ))}
+              );
+            })}
           </ul>
         )}
       </div>

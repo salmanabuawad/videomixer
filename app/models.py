@@ -36,10 +36,13 @@ class RenderJob(SQLModel, table=True):
     output_path: str = ""
     error_text: str = ""
     render_engine: str = ""  # local | shotstack
+    stage: str = ""  # planning | submitting | queued | fetching | rendering | saving | downloading | done
+    progress_message: str = ""
     parent_job_id: Optional[int] = Field(default=None, foreign_key="renderjob.id", index=True)
     enhancement_request: str = ""
     render_plan_json: str = ""
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 class AppConfig(SQLModel, table=True):
