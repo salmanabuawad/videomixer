@@ -209,10 +209,12 @@ def _runway_pass(project_id: int, report) -> None:
             s.commit()
 
 
-def _load_planner_context(session: Session, project_id: int) -> tuple[dict, list[dict], list[dict]]:
+def _load_planner_context(
+    session: Session, project_id: int
+) -> tuple[dict, list[dict], list[dict], list[dict]]:
     knowledge = _knowledge_dict_for(session, project_id)
-    hero, support = _project_asset_lists(session, project_id)
-    return knowledge, hero, support
+    hero, support, presenter = _project_asset_lists(session, project_id)
+    return knowledge, hero, support, presenter
 
 
 def _heygen_pass(project_id: int, report) -> None:
@@ -325,15 +327,17 @@ def _render_worker(job_id: int) -> None:
             _heygen_pass(project_id, report)
 
         with Session(db_engine) as s:
-            knowledge, hero, support = _load_planner_context(s, project_id)
+            knowledge, hero, support, presenter = _load_planner_context(s, project_id)
 
         if enhancement_request:
             report("planning", "Revising plan with your feedback…")
             previous_plan = json.loads(parent_plan_json) if parent_plan_json else {}
-            plan = revise_render_plan(previous_plan, enhancement_request, knowledge, hero, support)
+            plan = revise_render_plan(
+                previous_plan, enhancement_request, knowledge, hero, support, presenter
+            )
         else:
             report("planning", "Asking OpenAI for the professional plan…")
-            plan = build_render_plan(knowledge, hero, support)
+            plan = build_render_plan(knowledge, hero, support, presenter)
 
         _update_job(job_id, render_plan_json=json.dumps(plan, ensure_ascii=False))
 
@@ -357,11 +361,16 @@ def _render_worker(job_id: int) -> None:
         )
 
 
+_PRESENTER_SOURCES = ("heygen", "heygen_stub")
+
+
 def _asset_meta_dict(asset: Asset) -> dict:
     d: dict = {
         "file_path": asset.file_path,
         "file_name": asset.file_name,
     }
+    if asset.source:
+        d["source"] = asset.source
     if asset.duration_sec:
         d["duration_sec"] = round(float(asset.duration_sec), 2)
     if asset.width and asset.height:
@@ -371,6 +380,14 @@ def _asset_meta_dict(asset: Asset) -> dict:
         d["is_narrow"] = (asset.width / asset.height) < 0.75
     if asset.duration_sec:
         d["is_short"] = float(asset.duration_sec) < 10
+    if asset.source in _PRESENTER_SOURCES:
+        try:
+            meta = json.loads(asset.metadata_json or "{}")
+        except json.JSONDecodeError:
+            meta = {}
+        role = str(meta.get("role") or "").strip()
+        d["presenter_role"] = role or "intro"
+        d["is_presenter"] = True
     return d
 
 
@@ -396,11 +413,12 @@ def _backfill_asset_metadata(session: Session, asset: Asset) -> None:
 
 def _project_asset_lists(
     session: Session, project_id: int
-) -> tuple[list[dict], list[dict]]:
-    """Return (hero[s], support[s]) as richly-described asset dicts.
+) -> tuple[list[dict], list[dict], list[dict]]:
+    """Return (hero[s], support[s], presenter[s]) as richly-described asset dicts.
 
-    Hero is the first video asset (oldest upload). Caller can use file_path
-    for engine, or pass the full dict context to the planner.
+    Presenter clips (source=heygen / heygen_stub) are a separate pool so the
+    planner can deliberately place them at intro/closing, not shuffle them into
+    general B-roll. Hero is the oldest non-presenter upload.
     """
     assets = session.exec(
         select(Asset).where(Asset.project_id == project_id).order_by(Asset.id.asc())
@@ -410,8 +428,17 @@ def _project_asset_lists(
         raise HTTPException(status_code=400, detail="Upload at least one video")
     for v in videos:
         _backfill_asset_metadata(session, v)
-    metas = [_asset_meta_dict(a) for a in videos]
-    return metas[:1], metas[1:]
+    presenter_rows = [a for a in videos if a.source in _PRESENTER_SOURCES]
+    reel_rows = [a for a in videos if a.source not in _PRESENTER_SOURCES]
+    if not reel_rows:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one non-presenter video upload is required.",
+        )
+    hero = [_asset_meta_dict(reel_rows[0])]
+    support = [_asset_meta_dict(a) for a in reel_rows[1:]]
+    presenter = [_asset_meta_dict(a) for a in presenter_rows]
+    return hero, support, presenter
 
 
 def _knowledge_dict_for(session: Session, project_id: int) -> dict:

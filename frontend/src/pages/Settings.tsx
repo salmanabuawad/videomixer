@@ -228,7 +228,11 @@ export function Settings() {
         <h2>HeyGen (presenter intro/outro)</h2>
         <p className="settings-hint">
           HeyGen generates the short presenter clips that bookend the reel. You need both an API key and a default
-          avatar ID from your HeyGen account. The API key input is write-only — saved values are never shown back.
+          avatar ID from your HeyGen account. Paste the{" "}
+          <strong>avatar look ID</strong> — long token like{" "}
+          <code>Abigail_expressive_20241125</code>, not the avatar's display name. If HeyGen returns{" "}
+          <code>avatar look not found</code>, the ID you pasted isn't a real HeyGen avatar. The API key input is
+          write-only — saved values are never shown back.
         </p>
         <p>
           <strong>HeyGen status:</strong>{" "}

@@ -152,16 +152,27 @@ def _format_assets(label: str, assets: list) -> str:
     return f"{label}: {assets}"
 
 
+_PRESENTER_PLACEMENT_RULE = """Presenter-clip placement (HARD RULE):
+- Each item in `presenter_assets` has is_presenter=true and a presenter_role ("intro" or "closing").
+- Use the presenter_role="intro" clip as the FIRST scene (`role="intro"`). Its scene `asset` must equal that clip's file_path. Do NOT stretch it — use its full duration (trim_sec=0).
+- Use the presenter_role="closing" clip as the LAST scene (`role="closing"`). Same rule: trim_sec=0, scene duration = clip duration.
+- Never use a presenter clip in the middle. Never skip a presenter clip that was supplied. If no presenter_assets are supplied, just plan without them."""
+
+
 def revise_render_plan(
     previous_plan: dict[str, Any],
     enhancement_request: str,
     knowledge: dict[str, Any],
     main_assets: list,
     support_assets: list,
+    presenter_assets: list | None = None,
 ) -> dict[str, Any]:
+    presenter_assets = presenter_assets or []
     user = f"""Revise the following render plan based on the user's feedback. Return the FULL revised plan JSON in the same schema below. Do NOT return a diff.
 
 {_PLAN_SCHEMA_DOC}
+
+{_PRESENTER_PLACEMENT_RULE}
 
 Rules specific to revision:
 - Only use asset file_paths that appear in the lists below.
@@ -181,18 +192,26 @@ Knowledge (for grounding claims):
 {_format_assets("Main assets", main_assets)}
 
 {_format_assets("Support assets", support_assets)}
+
+{_format_assets("Presenter assets (intro/closing)", presenter_assets)}
 """
     return _chat_json(SYSTEM_PROMPT, user)
 
 
 def build_render_plan(
-    knowledge: dict[str, Any], main_assets: list, support_assets: list
+    knowledge: dict[str, Any],
+    main_assets: list,
+    support_assets: list,
+    presenter_assets: list | None = None,
 ) -> dict[str, Any]:
+    presenter_assets = presenter_assets or []
     user = f"""You are planning a vertical 9:16 marketing video (~55–70 seconds) for Zym-Tec.
 
-Before planning, **study all the material provided** — both the uploaded document knowledge and the per-asset metadata below (duration, dimensions, is_narrow, is_short). Your plan must be grounded in this source material and must respect the physical properties of the uploaded clips (e.g. do not schedule 15s from a 6-second clip; do not stretch a narrow clip to fill the frame — use the layered composition instead).
+Before planning, **study all the material provided** — both the uploaded document knowledge and the per-asset metadata below (duration, dimensions, is_narrow, is_short, source, presenter_role). Your plan must be grounded in this source material and must respect the physical properties of the uploaded clips (e.g. do not schedule 15s from a 6-second clip; do not stretch a narrow clip to fill the frame — use the layered composition instead).
 
 {_PLAN_SCHEMA_DOC}
+
+{_PRESENTER_PLACEMENT_RULE}
 
 Knowledge (study this for summary, process steps, claims, benefits, narrative arc):
 {json.dumps(knowledge, ensure_ascii=False)}
@@ -200,5 +219,7 @@ Knowledge (study this for summary, process steps, claims, benefits, narrative ar
 {_format_assets("Main assets (hero — use index 0 most)", main_assets)}
 
 {_format_assets("Support assets", support_assets)}
+
+{_format_assets("Presenter assets (intro/closing — see hard rule above)", presenter_assets)}
 """
     return _chat_json(SYSTEM_PROMPT, user)
