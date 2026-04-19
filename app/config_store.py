@@ -30,6 +30,7 @@ KEY_SHOTSTACK_PRODUCTION_KEY = "shotstack_production_key"
 KEY_SHOTSTACK_USE_PRODUCTION = "shotstack_use_production"
 KEY_SHOTSTACK_API_ENV = "shotstack_api_env"
 KEY_PUBLIC_UPLOAD_URL_PREFIX = "public_upload_url_prefix"
+KEY_RUNWAY_API_KEY = "runway_api_key"
 
 # Values copied from .env.example that must be replaced (never call OpenAI with these).
 _PLACEHOLDER_KEYS = frozenset(
@@ -141,6 +142,13 @@ def public_upload_url_prefix() -> str:
 
 def shotstack_use_production_effective() -> bool:
     return _truthy_setting(KEY_SHOTSTACK_USE_PRODUCTION, ENV_SHOTSTACK_USE_PRODUCTION)
+
+
+def runway_api_key() -> str:
+    db_val = get_setting(KEY_RUNWAY_API_KEY, "")
+    if db_val:
+        return db_val
+    return (os.getenv("RUNWAY_API_KEY") or "").strip()
 
 
 def upsert_setting(session: Session, key: str, value: str) -> None:

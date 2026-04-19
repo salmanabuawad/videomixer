@@ -29,6 +29,12 @@ _ASSET_COLUMN_DDL = {
     "duration_sec": "ALTER TABLE asset ADD COLUMN duration_sec REAL DEFAULT 0",
     "fps": "ALTER TABLE asset ADD COLUMN fps REAL DEFAULT 0",
     "metadata_json": "ALTER TABLE asset ADD COLUMN metadata_json TEXT DEFAULT ''",
+    "source": "ALTER TABLE asset ADD COLUMN source VARCHAR(32) DEFAULT ''",
+}
+
+_KNOWLEDGE_COLUMN_DDL = {
+    "narration_text": "ALTER TABLE knowledge ADD COLUMN narration_text TEXT DEFAULT ''",
+    "generated_clip_requests_json": "ALTER TABLE knowledge ADD COLUMN generated_clip_requests_json TEXT DEFAULT '[]'",
 }
 
 
@@ -52,6 +58,7 @@ def init_db():
     SQLModel.metadata.create_all(engine)
     _ensure_columns("renderjob", _RENDER_JOB_COLUMN_DDL)
     _ensure_columns("asset", _ASSET_COLUMN_DDL)
+    _ensure_columns("knowledge", _KNOWLEDGE_COLUMN_DDL)
 
 
 def get_session():

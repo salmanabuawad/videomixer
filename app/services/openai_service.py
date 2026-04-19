@@ -73,7 +73,15 @@ def _chat_json(system: str, user: str) -> dict[str, Any]:
         raise ValueError(f"Model did not return valid JSON: {e}") from e
 
 
-def extract_knowledge(doc_text: str) -> dict[str, Any]:
+def extract_knowledge(doc_text: str, asset_inventory: list | None = None) -> dict[str, Any]:
+    inventory_block = ""
+    if asset_inventory:
+        inventory_block = (
+            "\nUploaded asset inventory (use this to decide what's missing — propose a "
+            "generated_clip_requests entry for any scene role the uploads don't cover):\n"
+            + json.dumps(asset_inventory, ensure_ascii=False, indent=2)
+            + "\n"
+        )
     user = f"""Analyze the uploaded Zym-Tec material and return ONE JSON object with these keys:
 
 - summary: 2–4 sentences: what the product/service is and who it is for.
@@ -84,13 +92,20 @@ def extract_knowledge(doc_text: str) -> dict[str, Any]:
 - narrative_arc: object with keys: hook (1–2 sentences), problem, solution, proof, cta — each a short string forming a complete mini-story.
 - storyboard: object with:
   - logline: one sentence pitch.
-  - scenes: array of objects, each with: role ("hero"|"support"|"title"), title, goal, duration_sec (numbers only, sum roughly 55–75 seconds across scenes), narration_hint (one sentence of what the VO should say in that beat).
+  - scenes: array of objects, each with: role (one of "problem" | "intro" | "spray" | "mix" | "compact" | "advantage" | "closing" — map to the spec's canonical arc), title, goal, duration_sec (numbers only, sum roughly 55–75 seconds across scenes), narration_hint.
+- narration_text: one continuous professional narration paragraph (~150–250 words) read aloud at marketing pace, matching the storyboard order. No stage directions — spoken words only.
+- generated_clip_requests: array of objects, one per scene role that the uploaded assets do NOT already cover, with:
+    - role: same tag as in the storyboard.scenes[].role
+    - needed: true
+    - prompt: a concise realistic text-to-video prompt (≤220 chars) suitable for Runway Gen-3. Describe subject, setting, camera, mood. No brand names.
+    - duration_sec: target clip duration in seconds (3–8).
+  If every storyboard role is covered by the uploads, return an empty array.
 
-The storyboard must read as a coherent arc: open with hook/hero, build problem→solution, end with CTA. Total implied runtime from scene durations should target ~60 seconds.
+The storyboard must read as a coherent arc — problem → intro → spray → mix → compact → advantage → closing — and total implied runtime should target ~55–65 seconds. Do not invent technical claims not in the source material.
 
 Source material:
 {doc_text[:24000]}
-"""
+{inventory_block}"""
     return _chat_json(SYSTEM_PROMPT, user)
 
 

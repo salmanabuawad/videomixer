@@ -44,6 +44,7 @@ class AssetOut(BaseModel):
     asset_type: str
     file_name: str
     mime_type: str = ""
+    source: str = ""
     width: int = 0
     height: int = 0
     duration_sec: float = 0.0
@@ -58,6 +59,8 @@ class KnowledgeOut(BaseModel):
     benefits: list[Any]
     search_terms: list[Any]
     storyboard: dict[str, Any]
+    narration_text: str = ""
+    generated_clip_requests: list[Any] = []
 
 
 class RenderJobOut(BaseModel):

@@ -28,6 +28,7 @@ from app.schemas import (
 from app.services.asset_analysis import probe_video
 from app.services.extract import extract_text_from_file
 from app.services.openai_service import build_render_plan, extract_knowledge, revise_render_plan
+from app.services.runway import generate_clip as runway_generate_clip, is_stub_mode as runway_is_stub
 from app.config import CONFIG_ADMIN_TOKEN, RENDER_DIR, UPLOAD_DIR
 from app.services.video_engine import produce_final_video
 from app.config_store import (
@@ -63,6 +64,8 @@ def _knowledge_to_out(row: Knowledge) -> KnowledgeOut:
         benefits=json.loads(row.benefits_json or "[]"),
         search_terms=json.loads(row.search_terms_json or "[]"),
         storyboard=json.loads(row.storyboard_json or "{}"),
+        narration_text=row.narration_text or "",
+        generated_clip_requests=json.loads(row.generated_clip_requests_json or "[]"),
     )
 
 
@@ -99,8 +102,85 @@ def _update_job(job_id: int, **fields) -> None:
         s.commit()
 
 
-def _render_worker(job_id: int, plan: dict) -> None:
-    """Runs in a background thread — updates the job row as stages progress."""
+def _runway_pass(project_id: int, report) -> None:
+    """Fill scene-role gaps from the knowledge's generated_clip_requests by
+    running Runway (or the ffmpeg stub) once per missing role."""
+    with Session(db_engine) as s:
+        k = s.exec(select(Knowledge).where(Knowledge.project_id == project_id)).first()
+        if not k or not (k.generated_clip_requests_json or "").strip():
+            return
+        try:
+            requests = json.loads(k.generated_clip_requests_json or "[]")
+        except json.JSONDecodeError:
+            return
+        existing = s.exec(
+            select(Asset).where(
+                Asset.project_id == project_id, Asset.source.in_(("runway", "ffmpeg_stub"))
+            )
+        ).all()
+        existing_roles = set()
+        for a in existing:
+            try:
+                existing_roles.add(
+                    (json.loads(a.metadata_json or "{}") or {}).get("role") or ""
+                )
+            except json.JSONDecodeError:
+                pass
+    if not requests:
+        return
+    report(
+        "generating",
+        f"Generating missing clips with {'FFmpeg placeholder' if runway_is_stub() else 'Runway'}…",
+    )
+    project_dir = os.path.join(UPLOAD_DIR, str(project_id), "generated")
+    for idx, req in enumerate(requests, start=1):
+        if not isinstance(req, dict):
+            continue
+        role = str(req.get("role") or "").strip()
+        prompt = str(req.get("prompt") or "").strip()
+        if not prompt or not req.get("needed", True):
+            continue
+        if role and role in existing_roles:
+            continue
+        dur = float(req.get("duration_sec") or 5.0)
+        slug = f"{role or 'generated'}_{idx}.mp4"
+        out_path = os.path.abspath(os.path.join(project_dir, slug))
+        try:
+            source_tag, model = runway_generate_clip(prompt, out_path, duration_sec=dur)
+        except Exception:
+            logger.exception("runway pass failed for role=%s", role)
+            continue
+        meta = probe_video(out_path)
+        probed = {k2: v for k2, v in (meta or {}).items() if k2 != "raw"}
+        probed["role"] = role
+        probed["prompt"] = prompt
+        probed["model"] = model
+        with Session(db_engine) as s:
+            asset = Asset(
+                project_id=project_id,
+                asset_type="video",
+                file_name=slug,
+                file_path=out_path,
+                mime_type="video/mp4",
+                source=source_tag,
+                width=int((meta or {}).get("width") or 0),
+                height=int((meta or {}).get("height") or 0),
+                duration_sec=float((meta or {}).get("duration_sec") or 0.0),
+                fps=float((meta or {}).get("fps") or 0.0),
+                metadata_json=json.dumps(probed, ensure_ascii=False),
+            )
+            s.add(asset)
+            s.commit()
+
+
+def _load_planner_context(session: Session, project_id: int) -> tuple[dict, list[dict], list[dict]]:
+    knowledge = _knowledge_dict_for(session, project_id)
+    hero, support = _project_asset_lists(session, project_id)
+    return knowledge, hero, support
+
+
+def _render_worker(job_id: int) -> None:
+    """Runs in a background thread. Decides initial vs enhance based on the job row."""
 
     def report(stage: str, message: str) -> None:
         _update_job(job_id, stage=stage, progress_message=message)
@@ -111,7 +191,33 @@ def _render_worker(job_id: int, plan: dict) -> None:
             if row is None:
                 return
             project_id = row.project_id
-        _update_job(job_id, status="running", stage="rendering", progress_message="Starting render…")
+            enhancement_request = row.enhancement_request or ""
+            parent_id = row.parent_job_id
+            parent_plan_json = ""
+            if parent_id:
+                parent = s.get(RenderJob, parent_id)
+                parent_plan_json = (parent.render_plan_json if parent else "") or ""
+
+        _update_job(job_id, status="running", stage="planning", progress_message="Loading project context…")
+
+        if not enhancement_request:
+            # Initial render: generate missing contextual clips before planning.
+            _runway_pass(project_id, report)
+
+        with Session(db_engine) as s:
+            knowledge, hero, support = _load_planner_context(s, project_id)
+
+        if enhancement_request:
+            report("planning", "Revising plan with your feedback…")
+            previous_plan = json.loads(parent_plan_json) if parent_plan_json else {}
+            plan = revise_render_plan(previous_plan, enhancement_request, knowledge, hero, support)
+        else:
+            report("planning", "Asking OpenAI for the professional plan…")
+            plan = build_render_plan(knowledge, hero, support)
+
+        _update_job(job_id, render_plan_json=json.dumps(plan, ensure_ascii=False))
+
+        report("rendering", "Starting render…")
         output_path = produce_final_video(project_id, plan, RENDER_DIR, progress=report)
         _update_job(
             job_id,
@@ -206,7 +312,6 @@ def _queue_render(
     session: Session,
     background_tasks: BackgroundTasks,
     project_id: int,
-    plan: dict,
     *,
     parent_job_id: Optional[int] = None,
     enhancement_request: str = "",
@@ -222,12 +327,11 @@ def _queue_render(
         render_engine=engine_name,
         parent_job_id=parent_job_id,
         enhancement_request=enhancement_request,
-        render_plan_json=json.dumps(plan, ensure_ascii=False),
     )
     session.add(job)
     session.commit()
     session.refresh(job)
-    background_tasks.add_task(_render_worker, job.id, plan)
+    background_tasks.add_task(_render_worker, job.id)
     return job
 
 
@@ -412,6 +516,7 @@ async def upload_assets(
                     {k: v for k, v in meta.items() if k != "raw"},
                     ensure_ascii=False,
                 )
+        asset.source = "upload"
         session.add(asset)
     session.commit()
     return {"ok": True, "uploaded": len(files)}
@@ -432,8 +537,13 @@ def extract_project_knowledge(project_id: int, session: Session = Depends(get_se
     if not texts:
         raise HTTPException(status_code=400, detail="No document text found")
     combined = "\n\n".join(texts)[:40000]
+    inventory = [
+        _asset_meta_dict(a) | {"source": a.source or "upload"}
+        for a in assets
+        if a.asset_type == "video"
+    ]
     try:
-        data = extract_knowledge(combined)
+        data = extract_knowledge(combined, inventory)
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
     if not isinstance(data, dict):
@@ -447,6 +557,10 @@ def extract_project_knowledge(project_id: int, session: Session = Depends(get_se
     row.benefits_json = json.dumps(data.get("benefits", []), ensure_ascii=False)
     row.search_terms_json = json.dumps(data.get("search_terms", []), ensure_ascii=False)
     row.storyboard_json = json.dumps(data.get("storyboard", {}), ensure_ascii=False)
+    row.narration_text = str(data.get("narration_text") or "")
+    row.generated_clip_requests_json = json.dumps(
+        data.get("generated_clip_requests", []), ensure_ascii=False
+    )
     row.extracted_text = combined
     session.add(row)
     session.commit()
@@ -462,19 +576,15 @@ def render_project(
     project = session.get(Project, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    knowledge_dict = _knowledge_dict_for(session, project_id)
-    main_assets, support_assets = _project_asset_lists(session, project_id)
-    try:
-        plan = build_render_plan(knowledge_dict, main_assets, support_assets)
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e)) from e
+    # Validate preconditions so the worker doesn't fail mysteriously.
+    _knowledge_dict_for(session, project_id)
+    _project_asset_lists(session, project_id)
     job = _queue_render(
         session,
         background_tasks,
         project_id,
-        plan,
         initial_stage="queued",
-        initial_message="Plan ready. Submitting render…",
+        initial_message="Queued — studying material, filling gaps, planning render…",
     )
     return {"ok": True, "job": _job_to_out(job)}
 
@@ -499,27 +609,16 @@ def enhance_job(
             status_code=400,
             detail="This job has no stored plan (was rendered before enhancements were supported). Re-render first.",
         )
-    try:
-        previous_plan = json.loads(parent.render_plan_json)
-    except json.JSONDecodeError as e:
-        raise HTTPException(status_code=500, detail=f"Corrupt stored plan: {e}") from e
-    knowledge_dict = _knowledge_dict_for(session, parent.project_id)
-    main_assets, support_assets = _project_asset_lists(session, parent.project_id)
-    try:
-        new_plan = revise_render_plan(
-            previous_plan, request_text, knowledge_dict, main_assets, support_assets
-        )
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=str(e)) from e
+    _knowledge_dict_for(session, parent.project_id)
+    _project_asset_lists(session, parent.project_id)
     job = _queue_render(
         session,
         background_tasks,
         parent.project_id,
-        new_plan,
         parent_job_id=parent.id,
         enhancement_request=request_text,
         initial_stage="queued",
-        initial_message="Revised plan ready. Submitting render…",
+        initial_message="Queued — revising plan with your feedback…",
     )
     return {"ok": True, "job": _job_to_out(job)}
 

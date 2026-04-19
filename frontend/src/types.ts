@@ -11,11 +11,19 @@ export type Asset = {
   asset_type: string;
   file_name: string;
   mime_type: string;
+  source: string;
   width: number;
   height: number;
   duration_sec: number;
   fps: number;
   created_at: string;
+};
+
+export type GeneratedClipRequest = {
+  role?: string;
+  needed?: boolean;
+  prompt?: string;
+  duration_sec?: number;
 };
 
 export type Knowledge = {
@@ -25,6 +33,8 @@ export type Knowledge = {
   benefits: unknown[];
   search_terms: unknown[];
   storyboard: Record<string, unknown>;
+  narration_text: string;
+  generated_clip_requests: GeneratedClipRequest[];
 };
 
 export type RenderJob = {

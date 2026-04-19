@@ -16,6 +16,7 @@ class Asset(SQLModel, table=True):
     file_name: str
     file_path: str
     mime_type: str = ""
+    source: str = ""  # "" / "upload" — user-uploaded; "runway" / "ffmpeg_stub" — generated
     width: int = 0
     height: int = 0
     duration_sec: float = 0.0
@@ -32,6 +33,8 @@ class Knowledge(SQLModel, table=True):
     benefits_json: str = "[]"
     search_terms_json: str = "[]"
     storyboard_json: str = "{}"
+    narration_text: str = ""
+    generated_clip_requests_json: str = "[]"
     extracted_text: str = ""
 
 class RenderJob(SQLModel, table=True):
