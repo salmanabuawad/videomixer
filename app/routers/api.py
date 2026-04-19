@@ -113,9 +113,11 @@ def _runway_pass(project_id: int, report) -> None:
             requests = json.loads(k.generated_clip_requests_json or "[]")
         except json.JSONDecodeError:
             return
+        # Only *real* Runway outputs count as "already done". Stubs are placeholders
+        # that should be upgraded the next time Runway is reachable/credited.
         existing = s.exec(
             select(Asset).where(
-                Asset.project_id == project_id, Asset.source.in_(("runway", "ffmpeg_stub"))
+                Asset.project_id == project_id, Asset.source == "runway"
             )
         ).all()
         existing_roles = set()
@@ -126,6 +128,18 @@ def _runway_pass(project_id: int, report) -> None:
                 )
             except json.JSONDecodeError:
                 pass
+        stub_rows = s.exec(
+            select(Asset).where(
+                Asset.project_id == project_id, Asset.source == "ffmpeg_stub"
+            )
+        ).all()
+        stale_stubs: dict[str, list[tuple[int, str]]] = {}
+        for a in stub_rows:
+            try:
+                role = (json.loads(a.metadata_json or "{}") or {}).get("role") or ""
+            except json.JSONDecodeError:
+                role = ""
+            stale_stubs.setdefault(role, []).append((a.id, a.file_path))
     if not requests:
         return
     report(
@@ -142,6 +156,20 @@ def _runway_pass(project_id: int, report) -> None:
             continue
         if role and role in existing_roles:
             continue
+        # Replace any existing placeholder for this role before regenerating —
+        # so a stub never permanently masks a role from Runway.
+        if role in stale_stubs:
+            with Session(db_engine) as s:
+                for aid, fpath in stale_stubs.pop(role):
+                    stale = s.get(Asset, aid)
+                    if stale:
+                        s.delete(stale)
+                    try:
+                        if fpath and os.path.exists(fpath):
+                            os.remove(fpath)
+                    except OSError:
+                        logger.warning("could not remove stale stub file %s", fpath)
+                s.commit()
         dur = float(req.get("duration_sec") or 5.0)
         slug = f"{role or 'generated'}_{idx}.mp4"
         out_path = os.path.abspath(os.path.join(project_dir, slug))
