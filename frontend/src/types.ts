@@ -34,6 +34,8 @@ export type Knowledge = {
   search_terms: unknown[];
   storyboard: Record<string, unknown>;
   narration_text: string;
+  intro_script: string;
+  closing_script: string;
   generated_clip_requests: GeneratedClipRequest[];
 };
 

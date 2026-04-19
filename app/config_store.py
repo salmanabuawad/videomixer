@@ -31,6 +31,20 @@ KEY_SHOTSTACK_USE_PRODUCTION = "shotstack_use_production"
 KEY_SHOTSTACK_API_ENV = "shotstack_api_env"
 KEY_PUBLIC_UPLOAD_URL_PREFIX = "public_upload_url_prefix"
 KEY_RUNWAY_API_KEY = "runway_api_key"
+KEY_HEYGEN_API_KEY = "heygen_api_key"
+KEY_HEYGEN_AVATAR_ID = "heygen_avatar_id_default"
+
+# Settings whose value must never touch disk in plaintext when encryption is enabled.
+SENSITIVE_KEYS = frozenset(
+    {
+        KEY_OPENAI_API_KEY,
+        KEY_SHOTSTACK_API_KEY,
+        KEY_SHOTSTACK_SANDBOX_KEY,
+        KEY_SHOTSTACK_PRODUCTION_KEY,
+        KEY_RUNWAY_API_KEY,
+        KEY_HEYGEN_API_KEY,
+    }
+)
 
 # Values copied from .env.example that must be replaced (never call OpenAI with these).
 _PLACEHOLDER_KEYS = frozenset(
@@ -56,11 +70,22 @@ def is_placeholder_api_key(key: str) -> bool:
 
 
 def get_setting(key: str, default: str = "") -> str:
+    from app.services import config_crypto
+
     with Session(engine) as session:
         row = session.exec(select(AppConfig).where(AppConfig.key == key)).first()
-        if row is not None and (row.value or "").strip():
-            return row.value.strip()
-    return default
+        if row is None:
+            return default
+        raw = (row.value or "").strip()
+        if not raw:
+            return default
+        if getattr(row, "is_encrypted", False) or config_crypto.is_ciphertext(raw):
+            try:
+                return config_crypto.decrypt(raw).strip()
+            except Exception:
+                # Fail closed — never return garbled ciphertext to callers.
+                return default
+        return raw
 
 
 def _truthy_setting(key: str, env_default: bool) -> bool:
@@ -151,15 +176,65 @@ def runway_api_key() -> str:
     return (os.getenv("RUNWAY_API_KEY") or "").strip()
 
 
+def heygen_api_key() -> str:
+    db_val = get_setting(KEY_HEYGEN_API_KEY, "")
+    if db_val:
+        return db_val
+    return (os.getenv("HEYGEN_API_KEY") or "").strip()
+
+
+def heygen_avatar_id() -> str:
+    db_val = get_setting(KEY_HEYGEN_AVATAR_ID, "")
+    if db_val:
+        return db_val
+    return (os.getenv("HEYGEN_AVATAR_ID") or "").strip()
+
+
 def upsert_setting(session: Session, key: str, value: str) -> None:
+    from app.services import config_crypto
+
+    stored = value or ""
+    encrypted = False
+    if stored and key in SENSITIVE_KEYS and config_crypto.is_enabled():
+        stored = config_crypto.encrypt(stored)
+        encrypted = True
     row = session.exec(select(AppConfig).where(AppConfig.key == key)).first()
     now = datetime.utcnow()
     if row:
-        row.value = value
+        row.value = stored
+        row.is_encrypted = encrypted
         row.updated_at = now
         session.add(row)
     else:
-        session.add(AppConfig(key=key, value=value, updated_at=now))
+        session.add(AppConfig(key=key, value=stored, is_encrypted=encrypted, updated_at=now))
+
+
+def backfill_encrypt_sensitive() -> int:
+    """One-shot: re-store any SENSITIVE_KEYS row whose value is still plaintext.
+
+    Runs at startup after migrations. No-op when the master key is missing — so
+    a half-configured server doesn't drop keys on the floor. Returns the number
+    of rows re-encrypted.
+    """
+    from app.services import config_crypto
+
+    if not config_crypto.is_enabled():
+        return 0
+    rewritten = 0
+    with Session(engine) as s:
+        for key in SENSITIVE_KEYS:
+            row = s.exec(select(AppConfig).where(AppConfig.key == key)).first()
+            if not row or not (row.value or "").strip():
+                continue
+            if getattr(row, "is_encrypted", False) or config_crypto.is_ciphertext(row.value):
+                continue
+            row.value = config_crypto.encrypt(row.value)
+            row.is_encrypted = True
+            row.updated_at = datetime.utcnow()
+            s.add(row)
+            rewritten += 1
+        s.commit()
+    return rewritten
 
 
 def seed_from_env() -> None:

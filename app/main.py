@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import CORS_ORIGINS, RENDER_DIR, UPLOAD_DIR
-from app.config_store import seed_from_env
+from app.config_store import backfill_encrypt_sensitive, seed_from_env
 from app.db import init_db
 from app.routers import api
 
@@ -17,6 +17,7 @@ from app.routers import api
 async def lifespan(app: FastAPI):
     init_db()
     seed_from_env()
+    backfill_encrypt_sensitive()
     yield
 
 

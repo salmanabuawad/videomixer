@@ -94,6 +94,8 @@ def extract_knowledge(doc_text: str, asset_inventory: list | None = None) -> dic
   - logline: one sentence pitch.
   - scenes: array of objects, each with: role (one of "problem" | "intro" | "spray" | "mix" | "compact" | "advantage" | "closing" — map to the spec's canonical arc), title, goal, duration_sec (numbers only, sum roughly 55–75 seconds across scenes), narration_hint.
 - narration_text: one continuous professional narration paragraph (~150–250 words) read aloud at marketing pace, matching the storyboard order. No stage directions — spoken words only.
+- intro_script: 1–2 sentences (≤45 words) for a presenter avatar to OPEN the video — warm, grounded, credible. No stage directions.
+- closing_script: 1–2 sentences (≤40 words) for the same presenter to CLOSE with a call to action. No stage directions.
 - generated_clip_requests: array of objects, one per scene role that the uploaded assets do NOT already cover, with:
     - role: same tag as in the storyboard.scenes[].role
     - needed: true

@@ -60,6 +60,8 @@ class KnowledgeOut(BaseModel):
     search_terms: list[Any]
     storyboard: dict[str, Any]
     narration_text: str = ""
+    intro_script: str = ""
+    closing_script: str = ""
     generated_clip_requests: list[Any] = []
 
 

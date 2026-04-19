@@ -29,6 +29,7 @@ from app.services.asset_analysis import probe_video
 from app.services.extract import extract_text_from_file
 from app.services.openai_service import build_render_plan, extract_knowledge, revise_render_plan
 from app.services.runway import generate_clip as runway_generate_clip, is_stub_mode as runway_is_stub
+from app.services.heygen import generate_presenter_clip, is_stub_mode as heygen_is_stub
 from app.config import CONFIG_ADMIN_TOKEN, RENDER_DIR, UPLOAD_DIR
 from app.services.video_engine import produce_final_video
 from app.config_store import (
@@ -65,6 +66,8 @@ def _knowledge_to_out(row: Knowledge) -> KnowledgeOut:
         search_terms=json.loads(row.search_terms_json or "[]"),
         storyboard=json.loads(row.storyboard_json or "{}"),
         narration_text=row.narration_text or "",
+        intro_script=row.intro_script or "",
+        closing_script=row.closing_script or "",
         generated_clip_requests=json.loads(row.generated_clip_requests_json or "[]"),
     )
 
@@ -207,6 +210,86 @@ def _load_planner_context(session: Session, project_id: int) -> tuple[dict, list
     return knowledge, hero, support
 
 
+def _heygen_pass(project_id: int, report) -> None:
+    """Produce short presenter intro + closing clips for bookending the reel."""
+    with Session(db_engine) as s:
+        k = s.exec(select(Knowledge).where(Knowledge.project_id == project_id)).first()
+        if not k:
+            return
+        intro = (k.intro_script or "").strip()
+        closing = (k.closing_script or "").strip()
+        if not intro and not closing:
+            return
+        existing = s.exec(
+            select(Asset).where(
+                Asset.project_id == project_id,
+                Asset.source.in_(("heygen", "heygen_stub")),
+            )
+        ).all()
+        existing_roles = set()
+        stale_stubs: dict[str, list[tuple[int, str]]] = {}
+        for a in existing:
+            try:
+                role = (json.loads(a.metadata_json or "{}") or {}).get("role") or ""
+            except json.JSONDecodeError:
+                role = ""
+            if a.source == "heygen":
+                existing_roles.add(role)
+            else:
+                stale_stubs.setdefault(role, []).append((a.id, a.file_path))
+
+    report(
+        "generating",
+        f"Generating presenter clips with {'HeyGen placeholder' if heygen_is_stub() else 'HeyGen'}…",
+    )
+    project_dir = os.path.join(UPLOAD_DIR, str(project_id), "presenter")
+    for role, script, dur in (("intro", intro, 6.0), ("closing", closing, 6.0)):
+        if not script or role in existing_roles:
+            continue
+        if role in stale_stubs:
+            with Session(db_engine) as s:
+                for aid, fpath in stale_stubs.pop(role):
+                    row = s.get(Asset, aid)
+                    if row:
+                        s.delete(row)
+                    try:
+                        if fpath and os.path.exists(fpath):
+                            os.remove(fpath)
+                    except OSError:
+                        logger.warning("could not remove stale heygen stub %s", fpath)
+                s.commit()
+        out_path = os.path.abspath(os.path.join(project_dir, f"{role}.mp4"))
+        try:
+            source_tag, model = generate_presenter_clip(
+                script, out_path, duration_hint_sec=dur
+            )
+        except Exception:
+            logger.exception("heygen pass failed for role=%s", role)
+            continue
+        meta = probe_video(out_path)
+        probed = {k2: v for k2, v in (meta or {}).items() if k2 != "raw"}
+        probed["role"] = role
+        probed["script"] = script
+        probed["model"] = model
+        with Session(db_engine) as s:
+            s.add(
+                Asset(
+                    project_id=project_id,
+                    asset_type="video",
+                    file_name=f"{role}.mp4",
+                    file_path=out_path,
+                    mime_type="video/mp4",
+                    source=source_tag,
+                    width=int((meta or {}).get("width") or 0),
+                    height=int((meta or {}).get("height") or 0),
+                    duration_sec=float((meta or {}).get("duration_sec") or 0.0),
+                    fps=float((meta or {}).get("fps") or 0.0),
+                    metadata_json=json.dumps(probed, ensure_ascii=False),
+                )
+            )
+            s.commit()
+
+
 def _render_worker(job_id: int) -> None:
     """Runs in a background thread. Decides initial vs enhance based on the job row."""
 
@@ -231,6 +314,7 @@ def _render_worker(job_id: int) -> None:
         if not enhancement_request:
             # Initial render: generate missing contextual clips before planning.
             _runway_pass(project_id, report)
+            _heygen_pass(project_id, report)
 
         with Session(db_engine) as s:
             knowledge, hero, support = _load_planner_context(s, project_id)
@@ -586,6 +670,8 @@ def extract_project_knowledge(project_id: int, session: Session = Depends(get_se
     row.search_terms_json = json.dumps(data.get("search_terms", []), ensure_ascii=False)
     row.storyboard_json = json.dumps(data.get("storyboard", {}), ensure_ascii=False)
     row.narration_text = str(data.get("narration_text") or "")
+    row.intro_script = str(data.get("intro_script") or "")
+    row.closing_script = str(data.get("closing_script") or "")
     row.generated_clip_requests_json = json.dumps(
         data.get("generated_clip_requests", []), ensure_ascii=False
     )

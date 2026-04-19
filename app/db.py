@@ -35,6 +35,12 @@ _ASSET_COLUMN_DDL = {
 _KNOWLEDGE_COLUMN_DDL = {
     "narration_text": "ALTER TABLE knowledge ADD COLUMN narration_text TEXT DEFAULT ''",
     "generated_clip_requests_json": "ALTER TABLE knowledge ADD COLUMN generated_clip_requests_json TEXT DEFAULT '[]'",
+    "intro_script": "ALTER TABLE knowledge ADD COLUMN intro_script TEXT DEFAULT ''",
+    "closing_script": "ALTER TABLE knowledge ADD COLUMN closing_script TEXT DEFAULT ''",
+}
+
+_APP_CONFIG_COLUMN_DDL = {
+    "is_encrypted": "ALTER TABLE app_config ADD COLUMN is_encrypted INTEGER DEFAULT 0",
 }
 
 
@@ -59,6 +65,7 @@ def init_db():
     _ensure_columns("renderjob", _RENDER_JOB_COLUMN_DDL)
     _ensure_columns("asset", _ASSET_COLUMN_DDL)
     _ensure_columns("knowledge", _KNOWLEDGE_COLUMN_DDL)
+    _ensure_columns("app_config", _APP_CONFIG_COLUMN_DDL)
 
 
 def get_session():

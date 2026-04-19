@@ -34,6 +34,8 @@ class Knowledge(SQLModel, table=True):
     search_terms_json: str = "[]"
     storyboard_json: str = "{}"
     narration_text: str = ""
+    intro_script: str = ""
+    closing_script: str = ""
     generated_clip_requests_json: str = "[]"
     extracted_text: str = ""
 
@@ -61,4 +63,5 @@ class AppConfig(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     key: str = Field(unique=True, index=True, max_length=128)
     value: str = ""
+    is_encrypted: bool = False
     updated_at: datetime = Field(default_factory=datetime.utcnow)
