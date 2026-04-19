@@ -1,0 +1,186 @@
+import { useEffect, useState } from "react";
+import { Link, useParams } from "react-router-dom";
+import type { ProjectDetail } from "../types";
+import * as api from "../api";
+
+export function ProjectPage() {
+  const { id } = useParams();
+  const projectId = Number(id);
+  const [data, setData] = useState<ProjectDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const load = () => {
+    if (!Number.isFinite(projectId)) {
+      setError("Invalid project id");
+      setLoading(false);
+      return;
+    }
+    setError(null);
+    api
+      .fetchProject(projectId)
+      .then(setData)
+      .catch((e: Error) => setError(e.message))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    setLoading(true);
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
+  async function onUpload(e: React.FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    const form = e.currentTarget;
+    const input = form.elements.namedItem("files") as HTMLInputElement;
+    if (!input.files?.length) return;
+    setBusy("upload");
+    setError(null);
+    try {
+      await api.uploadAssets(projectId, input.files);
+      input.value = "";
+      await load();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onExtract() {
+    setBusy("extract");
+    setError(null);
+    try {
+      await api.extractKnowledge(projectId);
+      await load();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Extract failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function onRender() {
+    setBusy("render");
+    setError(null);
+    try {
+      await api.renderProject(projectId);
+      await load();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Render failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  if (loading) return <p>Loading…</p>;
+  if (error && !data) return <p className="error">{error}</p>;
+  if (!data) return null;
+
+  const { project, assets, knowledge, jobs } = data;
+
+  return (
+    <>
+      <p>
+        <Link to="/">← Home</Link>
+      </p>
+      <h1>{project.name}</h1>
+      {error && <p className="error">{error}</p>}
+
+      <div className="grid">
+        <div className="card">
+          <h3>Upload files</h3>
+          <form onSubmit={onUpload}>
+            <input name="files" type="file" multiple required />
+            <div style={{ marginTop: 8 }}>
+              <button type="submit" disabled={busy === "upload"}>
+                {busy === "upload" ? "Uploading…" : "Upload"}
+              </button>
+            </div>
+          </form>
+          <h4>Assets</h4>
+          <ul>
+            {assets.map((a) => (
+              <li key={a.id}>
+                {a.asset_type} — {a.file_name}
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <div className="card">
+          <h3>Actions</h3>
+          <p>
+            <button type="button" className="primary" onClick={onExtract} disabled={!!busy}>
+              {busy === "extract" ? "Extracting…" : "Extract knowledge from docs"}
+            </button>
+          </p>
+          <p>
+            <button type="button" className="primary" onClick={onRender} disabled={!!busy}>
+              {busy === "render" ? "Rendering…" : "Generate marketing clip"}
+            </button>
+          </p>
+        </div>
+      </div>
+
+      <div className="card">
+        <h3>Knowledge summary</h3>
+        {knowledge ? (
+          <>
+            <p>
+              <strong>Summary:</strong> {knowledge.summary}
+            </p>
+            <p>
+              <strong>Process steps:</strong>
+            </p>
+            <pre className="json">{JSON.stringify(knowledge.process_steps, null, 2)}</pre>
+            <p>
+              <strong>Key claims:</strong>
+            </p>
+            <pre className="json">{JSON.stringify(knowledge.key_claims, null, 2)}</pre>
+            <p>
+              <strong>Benefits:</strong>
+            </p>
+            <pre className="json">{JSON.stringify(knowledge.benefits, null, 2)}</pre>
+            <p>
+              <strong>Search terms:</strong>
+            </p>
+            <pre className="json">{JSON.stringify(knowledge.search_terms, null, 2)}</pre>
+            <h4>Storyboard</h4>
+            <pre className="json">{JSON.stringify(knowledge.storyboard, null, 2)}</pre>
+          </>
+        ) : (
+          <p>No knowledge extracted yet.</p>
+        )}
+      </div>
+
+      <div className="card">
+        <h3>Render jobs</h3>
+        {jobs.length === 0 ? (
+          <p>No jobs yet.</p>
+        ) : (
+          <ul>
+            {jobs.map((j) => (
+              <li key={j.id}>
+                Job {j.id} — {j.status}
+                {j.render_engine ? ` — ${j.render_engine}` : ""}
+                {j.download_url && (
+                  <>
+                    {" "}
+                    —{" "}
+                    <a href={api.downloadJobUrl(j.id)} download>
+                      Download video
+                    </a>
+                  </>
+                )}
+                {j.error_text && <pre className="error json">{j.error_text}</pre>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </>
+  );
+}

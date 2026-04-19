@@ -1,0 +1,26 @@
+[Unit]
+Description=Zym-Tec Production System (FastAPI / Uvicorn)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/zymtech_innovation
+EnvironmentFile=/opt/zymtech_innovation/.env
+# Port 8025 avoids clashes when other apps already use 127.0.0.1:8000 — update Nginx upstream to match.
+ExecStart=/opt/zymtech_innovation/.venv/bin/uvicorn app.main:app \
+    --host 127.0.0.1 \
+    --port 8025 \
+    --proxy-headers \
+    --forwarded-allow-ips=127.0.0.1
+Restart=on-failure
+RestartSec=5
+
+# Hardening (adjust if you run as a different user)
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
