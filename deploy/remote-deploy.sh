@@ -31,6 +31,7 @@ rsync -avz --delete \
   "$ROOT/" "${REMOTE}:${DEST}/"
 
 echo "Running remote post-deploy ..."
-ssh "$REMOTE" "export APP_ROOT='$DEST'; bash -s" < "$(dirname "$0")/post-deploy.sh"
+# tr strips CR so Windows-checked-out scripts still parse under bash.
+tr -d '\r' < "$(dirname "$0")/post-deploy.sh" | ssh "$REMOTE" "export APP_ROOT='$DEST'; bash -s"
 
 echo "Done. Test: curl -sS https://mixer.wavelync.com/api/health"
