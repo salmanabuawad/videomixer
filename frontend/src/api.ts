@@ -94,6 +94,9 @@ export type ConfigStatus = {
   shotstack_use_production: boolean;
   shotstack_api_env_effective: string;
   shotstack_api_env_override: string;
+  heygen_configured: boolean;
+  heygen_avatar_id: string;
+  config_encryption_enabled: boolean;
 };
 
 export async function fetchConfigStatus(): Promise<ConfigStatus> {
@@ -135,6 +138,26 @@ export async function saveShotstackConfig(
     headers["X-Admin-Token"] = adminToken;
   }
   return request("/api/admin/shotstack", {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+}
+
+export type HeyGenConfigPayload = {
+  heygen_api_key: string;
+  heygen_avatar_id: string;
+};
+
+export async function saveHeyGenConfig(
+  body: HeyGenConfigPayload,
+  adminToken?: string
+): Promise<{ ok: boolean; heygen_configured: boolean; heygen_avatar_id: string }> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (adminToken) {
+    headers["X-Admin-Token"] = adminToken;
+  }
+  return request("/api/admin/heygen", {
     method: "POST",
     headers,
     body: JSON.stringify(body),

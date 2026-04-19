@@ -23,6 +23,15 @@ class ShotstackConfigIn(BaseModel):
     shotstack_api_env: str = ""
 
 
+class HeyGenConfigIn(BaseModel):
+    """Write-only HeyGen settings. An empty `heygen_api_key` is ignored (keeps
+    the previously stored key), so operators can update avatar_id without
+    re-entering the secret."""
+
+    heygen_api_key: str = ""
+    heygen_avatar_id: str = ""
+
+
 class ProjectCreate(BaseModel):
     name: str
 

@@ -17,6 +17,7 @@ from app.models import Asset, Knowledge, Project, RenderJob
 from app.schemas import (
     AssetOut,
     EnhanceJobIn,
+    HeyGenConfigIn,
     KnowledgeOut,
     OpenAIConfigIn,
     ProjectCreate,
@@ -33,6 +34,8 @@ from app.services.heygen import generate_presenter_clip, is_stub_mode as heygen_
 from app.config import CONFIG_ADMIN_TOKEN, RENDER_DIR, UPLOAD_DIR
 from app.services.video_engine import produce_final_video
 from app.config_store import (
+    KEY_HEYGEN_API_KEY,
+    KEY_HEYGEN_AVATAR_ID,
     KEY_OPENAI_API_KEY,
     KEY_OPENAI_MODEL,
     KEY_PUBLIC_UPLOAD_URL_PREFIX,
@@ -42,6 +45,8 @@ from app.config_store import (
     KEY_SHOTSTACK_SANDBOX_KEY,
     KEY_SHOTSTACK_USE_PRODUCTION,
     KEY_VIDEO_ENGINE,
+    heygen_api_key,
+    heygen_avatar_id,
     is_placeholder_api_key,
     openai_api_key,
     openai_model,
@@ -458,6 +463,8 @@ def health():
 @router.get("/config/status")
 def config_status():
     """Non-secret sanity check: whether an API key is available and which model name is used."""
+    from app.services import config_crypto
+
     return {
         "openai_configured": bool(openai_api_key()),
         "openai_model": openai_model(),
@@ -469,6 +476,9 @@ def config_status():
         "shotstack_use_production": shotstack_use_production_effective(),
         "shotstack_api_env_effective": shotstack_api_env_resolved(),
         "shotstack_api_env_override": shotstack_api_env_override_raw(),
+        "heygen_configured": bool(heygen_api_key()),
+        "heygen_avatar_id": heygen_avatar_id(),
+        "config_encryption_enabled": config_crypto.is_enabled(),
     }
 
 
@@ -554,6 +564,26 @@ def save_shotstack_config(body: ShotstackConfigIn, request: Request, session: Se
         "shotstack_use_production": shotstack_use_production_effective(),
         "shotstack_api_env_effective": shotstack_api_env_resolved(),
         "shotstack_api_env_override": shotstack_api_env_override_raw(),
+    }
+
+
+@router.post("/admin/heygen")
+def save_heygen_config(
+    body: HeyGenConfigIn, request: Request, session: Session = Depends(get_session)
+):
+    """Save HeyGen key and default avatar ID into app_config. Empty api_key is
+    preserved (admin can update avatar_id without re-typing the secret)."""
+    _admin_gate(request, bool(heygen_api_key()))
+    new_key = (body.heygen_api_key or "").strip()
+    if new_key:
+        upsert_setting(session, KEY_HEYGEN_API_KEY, new_key)
+    new_avatar = (body.heygen_avatar_id or "").strip()
+    upsert_setting(session, KEY_HEYGEN_AVATAR_ID, new_avatar)
+    session.commit()
+    return {
+        "ok": True,
+        "heygen_configured": bool(heygen_api_key()),
+        "heygen_avatar_id": heygen_avatar_id(),
     }
 
 

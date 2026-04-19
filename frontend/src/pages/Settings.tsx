@@ -22,6 +22,15 @@ export function Settings() {
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  const [heygenConfigured, setHeygenConfigured] = useState<boolean | null>(null);
+  const [heygenAvatarIdCurrent, setHeygenAvatarIdCurrent] = useState("");
+  const [heygenKey, setHeygenKey] = useState("");
+  const [heygenAvatarId, setHeygenAvatarId] = useState("");
+  const [savingHeygen, setSavingHeygen] = useState(false);
+  const [heygenMessage, setHeygenMessage] = useState<string | null>(null);
+  const [heygenError, setHeygenError] = useState<string | null>(null);
+  const [encryptionEnabled, setEncryptionEnabled] = useState<boolean | null>(null);
+
   const [videoEngine, setVideoEngine] = useState("local");
   const [publicUploadUrl, setPublicUploadUrl] = useState("");
   const [shotstackUseProd, setShotstackUseProd] = useState(false);
@@ -47,6 +56,10 @@ export function Settings() {
     setShotstackApiEnv(s.shotstack_api_env_override || "");
     setShotstackEnvEffective(s.shotstack_api_env_effective || "");
     setShotstackConfigured(s.shotstack_configured);
+    setHeygenConfigured(s.heygen_configured);
+    setHeygenAvatarIdCurrent(s.heygen_avatar_id || "");
+    setHeygenAvatarId(s.heygen_avatar_id || "");
+    setEncryptionEnabled(s.config_encryption_enabled);
   }
 
   useEffect(() => {
@@ -75,6 +88,34 @@ export function Settings() {
       setError(err instanceof Error ? err.message : "Save failed");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function onSubmitHeygen(e: FormEvent) {
+    e.preventDefault();
+    setSavingHeygen(true);
+    setHeygenError(null);
+    setHeygenMessage(null);
+    try {
+      const res = await api.saveHeyGenConfig(
+        {
+          heygen_api_key: heygenKey.trim(),
+          heygen_avatar_id: heygenAvatarId.trim(),
+        },
+        adminToken.trim() || undefined
+      );
+      setHeygenMessage(
+        res.heygen_configured
+          ? "Saved. HeyGen is configured and the key is encrypted at rest."
+          : "Saved. Avatar ID updated (no API key configured yet)."
+      );
+      setHeygenKey("");
+      const s = await api.fetchConfigStatus();
+      applyConfigStatus(s);
+    } catch (err: unknown) {
+      setHeygenError(err instanceof Error ? err.message : "Save failed");
+    } finally {
+      setSavingHeygen(false);
     }
   }
 
@@ -116,8 +157,13 @@ export function Settings() {
       </p>
       <h1>Settings</h1>
       <p className="settings-hint">
-        OpenAI and video provider settings are stored in the server <code>app_config</code> table (with{" "}
-        <code>.env</code> fallback). After secrets are saved, the server may require an admin token — set{" "}
+        Provider keys are stored in the server <code>app_config</code> table. Sensitive keys are{" "}
+        {encryptionEnabled === null ? "…" : encryptionEnabled ? (
+          <strong style={{ color: "#1a7f37" }}>encrypted at rest</strong>
+        ) : (
+          <strong style={{ color: "#b42318" }}>NOT encrypted — CONFIG_MASTER_KEY missing</strong>
+        )}
+        . After any secret is saved, the server may require an admin token — set{" "}
         <code>CONFIG_ADMIN_TOKEN</code> in <code>.env</code> and enter the same value below.
       </p>
 
@@ -174,6 +220,58 @@ export function Settings() {
           {message && <p className="settings-success">{message}</p>}
           <button type="submit" className="primary login-button" disabled={saving}>
             {saving ? "Saving…" : "Save"}
+          </button>
+        </form>
+      </div>
+
+      <div className="card">
+        <h2>HeyGen (presenter intro/outro)</h2>
+        <p className="settings-hint">
+          HeyGen generates the short presenter clips that bookend the reel. You need both an API key and a default
+          avatar ID from your HeyGen account. The API key input is write-only — saved values are never shown back.
+        </p>
+        <p>
+          <strong>HeyGen status:</strong>{" "}
+          {heygenConfigured === null
+            ? "…"
+            : heygenConfigured
+            ? "API key configured"
+            : "No API key yet (using FFmpeg placeholder)"}
+        </p>
+        {heygenAvatarIdCurrent && (
+          <p>
+            <strong>Current avatar ID:</strong> <code>{heygenAvatarIdCurrent}</code>
+          </p>
+        )}
+        <form onSubmit={onSubmitHeygen} className="login-form">
+          <label className="login-label" htmlFor="heygenKey">
+            HeyGen API key (leave empty to keep current)
+          </label>
+          <input
+            id="heygenKey"
+            className="login-input"
+            type="password"
+            autoComplete="off"
+            value={heygenKey}
+            onChange={(e) => setHeygenKey(e.target.value)}
+            placeholder={heygenConfigured ? "••••••• (saved — enter new to replace)" : "paste your HeyGen key"}
+          />
+          <label className="login-label" htmlFor="heygenAvatarId">
+            Default avatar ID
+          </label>
+          <input
+            id="heygenAvatarId"
+            className="login-input"
+            type="text"
+            autoComplete="off"
+            value={heygenAvatarId}
+            onChange={(e) => setHeygenAvatarId(e.target.value)}
+            placeholder="e.g. Abigail_expressive_2024112501"
+          />
+          {heygenError && <p className="error login-error">{heygenError}</p>}
+          {heygenMessage && <p className="settings-success">{heygenMessage}</p>}
+          <button type="submit" className="primary login-button" disabled={savingHeygen}>
+            {savingHeygen ? "Saving…" : "Save HeyGen settings"}
           </button>
         </form>
       </div>
