@@ -36,6 +36,9 @@ class RenderJob(SQLModel, table=True):
     output_path: str = ""
     error_text: str = ""
     render_engine: str = ""  # local | shotstack
+    parent_job_id: Optional[int] = Field(default=None, foreign_key="renderjob.id", index=True)
+    enhancement_request: str = ""
+    render_plan_json: str = ""
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 

@@ -31,6 +31,8 @@ export type RenderJob = {
   error_text: string;
   /** "local" | "shotstack" — empty on jobs created before this field existed */
   render_engine: string;
+  parent_job_id: number | null;
+  enhancement_request: string;
   created_at: string;
   download_url: string | null;
 };

@@ -12,6 +12,7 @@ from app.db import get_session
 from app.models import Asset, Knowledge, Project, RenderJob
 from app.schemas import (
     AssetOut,
+    EnhanceJobIn,
     KnowledgeOut,
     OpenAIConfigIn,
     ProjectCreate,
@@ -21,7 +22,7 @@ from app.schemas import (
     ShotstackConfigIn,
 )
 from app.services.extract import extract_text_from_file
-from app.services.openai_service import build_render_plan, extract_knowledge
+from app.services.openai_service import build_render_plan, extract_knowledge, revise_render_plan
 from app.config import CONFIG_ADMIN_TOKEN, RENDER_DIR, UPLOAD_DIR
 from app.services.video_engine import produce_final_video
 from app.config_store import (
@@ -71,9 +72,66 @@ def _job_to_out(job: RenderJob) -> RenderJobOut:
         output_path=job.output_path or "",
         error_text=job.error_text or "",
         render_engine=getattr(job, "render_engine", None) or "",
+        parent_job_id=getattr(job, "parent_job_id", None),
+        enhancement_request=getattr(job, "enhancement_request", None) or "",
         created_at=job.created_at,
         download_url=dl,
     )
+
+
+def _project_asset_lists(session: Session, project_id: int) -> tuple[list[str], list[str]]:
+    assets = session.exec(select(Asset).where(Asset.project_id == project_id)).all()
+    videos = [a.file_path for a in assets if a.asset_type == "video"]
+    if not videos:
+        raise HTTPException(status_code=400, detail="Upload at least one video")
+    return videos[:1], videos[1:]
+
+
+def _knowledge_dict_for(session: Session, project_id: int) -> dict:
+    row = session.exec(select(Knowledge).where(Knowledge.project_id == project_id)).first()
+    if not row:
+        raise HTTPException(status_code=400, detail="Extract knowledge first")
+    return {
+        "summary": row.summary,
+        "process_steps": json.loads(row.process_steps_json),
+        "key_claims": json.loads(row.key_claims_json),
+        "benefits": json.loads(row.benefits_json),
+        "search_terms": json.loads(row.search_terms_json),
+        "storyboard": json.loads(row.storyboard_json or "{}"),
+    }
+
+
+def _execute_render(
+    session: Session,
+    project_id: int,
+    plan: dict,
+    *,
+    parent_job_id: Optional[int] = None,
+    enhancement_request: str = "",
+) -> RenderJob:
+    engine_name = video_engine()
+    job = RenderJob(
+        project_id=project_id,
+        status="running",
+        render_engine=engine_name,
+        parent_job_id=parent_job_id,
+        enhancement_request=enhancement_request,
+        render_plan_json=json.dumps(plan, ensure_ascii=False),
+    )
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+    try:
+        output_path = produce_final_video(project_id, plan, RENDER_DIR)
+        job.status = "done"
+        job.output_path = output_path
+    except Exception as e:
+        job.status = "failed"
+        job.error_text = str(e)
+    session.add(job)
+    session.commit()
+    session.refresh(job)
+    return job
 
 
 @router.get("/health")
@@ -293,41 +351,50 @@ def render_project(project_id: int, session: Session = Depends(get_session)):
     project = session.get(Project, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    assets = session.exec(select(Asset).where(Asset.project_id == project_id)).all()
-    knowledge = session.exec(select(Knowledge).where(Knowledge.project_id == project_id)).first()
-    if not knowledge:
-        raise HTTPException(status_code=400, detail="Extract knowledge first")
-    main_assets = [a.file_path for a in assets if a.asset_type == "video"][:1]
-    support_assets = [a.file_path for a in assets if a.asset_type == "video"][1:]
-    if not main_assets:
-        raise HTTPException(status_code=400, detail="Upload at least one video")
-    knowledge_dict = {
-        "summary": knowledge.summary,
-        "process_steps": json.loads(knowledge.process_steps_json),
-        "key_claims": json.loads(knowledge.key_claims_json),
-        "benefits": json.loads(knowledge.benefits_json),
-        "search_terms": json.loads(knowledge.search_terms_json),
-        "storyboard": json.loads(knowledge.storyboard_json or "{}"),
-    }
+    knowledge_dict = _knowledge_dict_for(session, project_id)
+    main_assets, support_assets = _project_asset_lists(session, project_id)
     try:
         plan = build_render_plan(knowledge_dict, main_assets, support_assets)
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
-    engine_name = video_engine()
-    job = RenderJob(project_id=project_id, status="running", render_engine=engine_name)
-    session.add(job)
-    session.commit()
-    session.refresh(job)
+    job = _execute_render(session, project_id, plan)
+    return {"ok": True, "job": _job_to_out(job)}
+
+
+@router.post("/jobs/{job_id}/enhance")
+def enhance_job(job_id: int, body: EnhanceJobIn, session: Session = Depends(get_session)):
+    request_text = (body.request or "").strip()
+    if not request_text:
+        raise HTTPException(status_code=400, detail="Improvement request is required")
+    parent = session.get(RenderJob, job_id)
+    if not parent:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if parent.status != "done":
+        raise HTTPException(status_code=400, detail="Only completed jobs can be enhanced")
+    if not parent.render_plan_json:
+        raise HTTPException(
+            status_code=400,
+            detail="This job has no stored plan (was rendered before enhancements were supported). Re-render first.",
+        )
     try:
-        output_path = produce_final_video(project_id, plan, RENDER_DIR)
-        job.status = "done"
-        job.output_path = output_path
+        previous_plan = json.loads(parent.render_plan_json)
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=500, detail=f"Corrupt stored plan: {e}") from e
+    knowledge_dict = _knowledge_dict_for(session, parent.project_id)
+    main_assets, support_assets = _project_asset_lists(session, parent.project_id)
+    try:
+        new_plan = revise_render_plan(
+            previous_plan, request_text, knowledge_dict, main_assets, support_assets
+        )
     except Exception as e:
-        job.status = "failed"
-        job.error_text = str(e)
-    session.add(job)
-    session.commit()
-    session.refresh(job)
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    job = _execute_render(
+        session,
+        parent.project_id,
+        new_plan,
+        parent_job_id=parent.id,
+        enhancement_request=request_text,
+    )
     return {"ok": True, "job": _job_to_out(job)}
 
 

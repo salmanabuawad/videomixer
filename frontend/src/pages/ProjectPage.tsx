@@ -75,6 +75,24 @@ export function ProjectPage() {
     }
   }
 
+  const [enhanceText, setEnhanceText] = useState<Record<number, string>>({});
+
+  async function onEnhance(jobId: number) {
+    const text = (enhanceText[jobId] || "").trim();
+    if (!text) return;
+    setBusy(`enhance-${jobId}`);
+    setError(null);
+    try {
+      await api.enhanceJob(jobId, text);
+      setEnhanceText((m) => ({ ...m, [jobId]: "" }));
+      await load();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Enhancement failed");
+    } finally {
+      setBusy(null);
+    }
+  }
+
   if (loading) return <p>Loading…</p>;
   if (error && !data) return <p className="error">{error}</p>;
   if (!data) return null;
@@ -163,9 +181,10 @@ export function ProjectPage() {
         ) : (
           <ul>
             {jobs.map((j) => (
-              <li key={j.id}>
+              <li key={j.id} style={{ marginBottom: 12 }}>
                 Job {j.id} — {j.status}
                 {j.render_engine ? ` — ${j.render_engine}` : ""}
+                {j.parent_job_id && <> — refined from Job {j.parent_job_id}</>}
                 {j.download_url && (
                   <>
                     {" "}
@@ -175,7 +194,35 @@ export function ProjectPage() {
                     </a>
                   </>
                 )}
+                {j.enhancement_request && (
+                  <p style={{ margin: "4px 0", color: "#57606a", fontSize: "0.9rem" }}>
+                    <em>Request:</em> {j.enhancement_request}
+                  </p>
+                )}
                 {j.error_text && <pre className="error json">{j.error_text}</pre>}
+                {j.status === "done" && (
+                  <div style={{ marginTop: 6, display: "flex", gap: 8 }}>
+                    <input
+                      type="text"
+                      placeholder="Ask for improvements (e.g. make the intro faster)"
+                      value={enhanceText[j.id] || ""}
+                      onChange={(e) =>
+                        setEnhanceText((m) => ({ ...m, [j.id]: e.target.value }))
+                      }
+                      disabled={busy === `enhance-${j.id}`}
+                      style={{ flex: 1, padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border)" }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => onEnhance(j.id)}
+                      disabled={
+                        !enhanceText[j.id]?.trim() || busy === `enhance-${j.id}`
+                      }
+                    >
+                      {busy === `enhance-${j.id}` ? "Revising…" : "Submit"}
+                    </button>
+                  </div>
+                )}
               </li>
             ))}
           </ul>

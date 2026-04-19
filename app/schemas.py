@@ -65,8 +65,14 @@ class RenderJobOut(BaseModel):
     output_path: str = ""
     error_text: str = ""
     render_engine: str = ""
+    parent_job_id: Optional[int] = None
+    enhancement_request: str = ""
     created_at: datetime
     download_url: Optional[str] = None
+
+
+class EnhanceJobIn(BaseModel):
+    request: str
 
 
 class ProjectDetailOut(BaseModel):

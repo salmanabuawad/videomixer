@@ -65,6 +65,14 @@ export async function renderProject(projectId: number): Promise<void> {
   await request(`/api/projects/${projectId}/render`, { method: "POST" });
 }
 
+export async function enhanceJob(jobId: number, requestText: string): Promise<void> {
+  await request(`/api/jobs/${jobId}/enhance`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ request: requestText }),
+  });
+}
+
 export function downloadJobUrl(jobId: number): string {
   return `${apiBase()}/api/jobs/${jobId}/download`;
 }

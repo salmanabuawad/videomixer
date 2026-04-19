@@ -94,6 +94,40 @@ Source material:
     return _chat_json(SYSTEM_PROMPT, user)
 
 
+def revise_render_plan(
+    previous_plan: dict[str, Any],
+    enhancement_request: str,
+    knowledge: dict[str, Any],
+    main_assets: list[str],
+    support_assets: list[str],
+) -> dict[str, Any]:
+    user = f"""Revise the following render plan based on the user's feedback. Return the FULL revised plan JSON in the same schema (aspect_ratio, total_duration_sec, scenes[] with role/asset/start_sec/duration_sec/title/subtitle, voiceover_script). Do NOT return a diff.
+
+Rules:
+- Only use asset paths that appear in the main or support lists below.
+- Keep the hero asset dominant unless the user explicitly asks to reduce it.
+- Preserve coherent narrative arc: hook → context → problem → solution → proof → CTA.
+- If the user asks for pacing changes, adjust duration_sec and total_duration_sec consistently.
+- If the user asks for new copy, update title/subtitle/voiceover_script accordingly.
+
+User feedback:
+{enhancement_request.strip()}
+
+Previous plan:
+{json.dumps(previous_plan, ensure_ascii=False)}
+
+Knowledge (for grounding claims):
+{json.dumps(knowledge, ensure_ascii=False)}
+
+Main assets:
+{main_assets}
+
+Support assets:
+{support_assets}
+"""
+    return _chat_json(SYSTEM_PROMPT, user)
+
+
 def build_render_plan(
     knowledge: dict[str, Any], main_assets: list[str], support_assets: list[str]
 ) -> dict[str, Any]:

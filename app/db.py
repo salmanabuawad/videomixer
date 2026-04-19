@@ -13,18 +13,25 @@ def _engine_kwargs():
 engine = create_engine(DATABASE_URL, echo=False, **_engine_kwargs())
 
 
-def _ensure_render_job_engine_column() -> None:
-    """Existing DBs created before `render_engine` need a migration."""
+_RENDER_JOB_COLUMN_DDL = {
+    "render_engine": "ALTER TABLE renderjob ADD COLUMN render_engine VARCHAR(32) DEFAULT ''",
+    "parent_job_id": "ALTER TABLE renderjob ADD COLUMN parent_job_id INTEGER",
+    "enhancement_request": "ALTER TABLE renderjob ADD COLUMN enhancement_request TEXT DEFAULT ''",
+    "render_plan_json": "ALTER TABLE renderjob ADD COLUMN render_plan_json TEXT DEFAULT ''",
+}
+
+
+def _ensure_render_job_columns() -> None:
     insp = inspect(engine)
-    tables = insp.get_table_names()
-    if "renderjob" not in tables:
+    if "renderjob" not in insp.get_table_names():
         return
     cols = {c["name"] for c in insp.get_columns("renderjob")}
-    if "render_engine" in cols:
+    missing = [(name, ddl) for name, ddl in _RENDER_JOB_COLUMN_DDL.items() if name not in cols]
+    if not missing:
         return
-    ddl = "ALTER TABLE renderjob ADD COLUMN render_engine VARCHAR(32) DEFAULT ''"
     with engine.begin() as conn:
-        conn.execute(text(ddl))
+        for _, ddl in missing:
+            conn.execute(text(ddl))
 
 
 def init_db():
@@ -32,7 +39,7 @@ def init_db():
     from app import models  # noqa: F401
 
     SQLModel.metadata.create_all(engine)
-    _ensure_render_job_engine_column()
+    _ensure_render_job_columns()
 
 
 def get_session():
