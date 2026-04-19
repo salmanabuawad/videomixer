@@ -25,8 +25,26 @@ from app.config_store import runway_api_key
 logger = logging.getLogger(__name__)
 
 RUNWAY_BASE = "https://api.dev.runwayml.com/v1"
+RUNWAY_API_VERSION = "2024-11-06"
 _POLL_TIMEOUT_SEC = 600
 _POLL_INTERVAL_SEC = 5
+
+# Runway image_to_video only accepts these durations (seconds).
+_VIDEO_DURATIONS = (5, 10)
+
+# gen4_image ratios (text_to_image). See https://docs.dev.runwayml.com/api/
+_IMAGE_RATIOS = {
+    "9:16": "1080:1920",
+    "16:9": "1920:1080",
+    "1:1": "1080:1080",
+}
+
+# gen4_turbo image_to_video ratios.
+_VIDEO_RATIOS = {
+    "9:16": "720:1280",
+    "16:9": "1280:720",
+    "1:1": "960:960",
+}
 
 
 def is_stub_mode() -> bool:
@@ -94,16 +112,41 @@ def _ar_to_dims(aspect_ratio: str) -> tuple[int, int]:
 
 
 def _runway_text_to_video(prompt: str, out_path: str, duration_sec: float, aspect_ratio: str) -> None:
+    """Runway Gen-3/4 is image-first: generate an image from the prompt, then
+    feed that image to image_to_video."""
     key = runway_api_key()
+    duration = 5 if duration_sec <= 7.5 else 10
+    image_ratio = _IMAGE_RATIOS.get(aspect_ratio, _IMAGE_RATIOS["9:16"])
+    video_ratio = _VIDEO_RATIOS.get(aspect_ratio, _VIDEO_RATIOS["9:16"])
+
+    image_url = _runway_text_to_image(prompt, image_ratio, key)
+    logger.info("Runway: got starting image, submitting image_to_video duration=%ss", duration)
+    video_url = _runway_image_to_video(prompt, image_url, video_ratio, duration, key)
+    _download(video_url, out_path)
+
+
+def _runway_text_to_image(prompt: str, ratio: str, key: str) -> str:
     body = {
         "promptText": prompt[:1000],
-        "model": "gen3a_turbo",
-        "duration": int(round(duration_sec)) or 5,
-        "ratio": aspect_ratio.replace(":", ":"),
+        "model": "gen4_image",
+        "ratio": ratio,
     }
-    job_id = _post_runway("/image_to_video", body, key)
-    output_url = _poll_runway(f"/tasks/{job_id}", key)
-    _download(output_url, out_path)
+    task_id = _post_runway("/text_to_image", body, key)
+    return _poll_runway(f"/tasks/{task_id}", key)
+
+
+def _runway_image_to_video(
+    prompt: str, image_url: str, ratio: str, duration: int, key: str
+) -> str:
+    body = {
+        "promptImage": image_url,
+        "promptText": prompt[:1000],
+        "model": "gen4_turbo",
+        "ratio": ratio,
+        "duration": duration,
+    }
+    task_id = _post_runway("/image_to_video", body, key)
+    return _poll_runway(f"/tasks/{task_id}", key)
 
 
 def _post_runway(path: str, body: dict, key: str) -> str:
@@ -115,7 +158,7 @@ def _post_runway(path: str, body: dict, key: str) -> str:
         headers={
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
-            "X-Runway-Version": "2024-11-06",
+            "X-Runway-Version": RUNWAY_API_VERSION,
         },
         method="POST",
     )
@@ -124,8 +167,9 @@ def _post_runway(path: str, body: dict, key: str) -> str:
             payload: dict[str, Any] = json.loads(resp.read().decode())
     except urllib.error.HTTPError as e:
         body_text = e.read().decode("utf-8", errors="replace")[:1500]
+        logger.error("Runway POST %s failed %s: %s\nBody sent: %s", url, e.code, body_text, json.dumps(body)[:1000])
         raise ValueError(f"Runway {e.code} {e.reason}: {body_text}") from e
-    task_id = payload.get("id") or payload.get("task", {}).get("id")
+    task_id = payload.get("id") or (payload.get("task") or {}).get("id")
     if not task_id:
         raise ValueError(f"Unexpected Runway response: {payload}")
     return str(task_id)
@@ -133,7 +177,7 @@ def _post_runway(path: str, body: dict, key: str) -> str:
 
 def _poll_runway(path: str, key: str) -> str:
     url = f"{RUNWAY_BASE}{path}"
-    headers = {"Authorization": f"Bearer {key}", "X-Runway-Version": "2024-11-06"}
+    headers = {"Authorization": f"Bearer {key}", "X-Runway-Version": RUNWAY_API_VERSION}
     deadline = time.time() + _POLL_TIMEOUT_SEC
     while time.time() < deadline:
         req = urllib.request.Request(url, headers=headers)
@@ -143,13 +187,13 @@ def _poll_runway(path: str, key: str) -> str:
         except urllib.error.HTTPError as e:
             body_text = e.read().decode("utf-8", errors="replace")[:1500]
             raise ValueError(f"Runway poll {e.code} {e.reason}: {body_text}") from e
-        status = (payload.get("status") or "").lower()
-        if status in ("succeeded", "success", "completed"):
+        status = (payload.get("status") or "").upper()
+        if status in ("SUCCEEDED", "SUCCESS", "COMPLETED"):
             outputs = payload.get("output") or payload.get("outputs") or []
             if isinstance(outputs, list) and outputs:
                 return str(outputs[0])
             raise ValueError(f"Runway task completed without an output URL: {payload}")
-        if status in ("failed", "error", "canceled"):
+        if status in ("FAILED", "ERROR", "CANCELED", "CANCELLED"):
             raise ValueError(f"Runway task failed: {payload}")
         time.sleep(_POLL_INTERVAL_SEC)
     raise TimeoutError("Runway task polling timed out")
