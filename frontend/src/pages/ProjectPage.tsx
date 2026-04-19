@@ -244,21 +244,6 @@ export function ProjectPage() {
                 )}
               </div>
             )}
-            {knowledge.generated_clip_requests && knowledge.generated_clip_requests.length > 0 && (
-              <>
-                <p>
-                  <strong>Clips OpenAI wants Runway to generate:</strong>
-                </p>
-                <ul>
-                  {knowledge.generated_clip_requests.map((g, i) => (
-                    <li key={i} style={{ marginBottom: 4 }}>
-                      <strong>{g.role || "scene"}</strong>
-                      {g.duration_sec ? ` · ${g.duration_sec}s` : ""} — {g.prompt}
-                    </li>
-                  ))}
-                </ul>
-              </>
-            )}
           </>
         ) : (
           <p>No knowledge extracted yet.</p>

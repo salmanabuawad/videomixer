@@ -312,8 +312,11 @@ def _render_worker(job_id: int) -> None:
         _update_job(job_id, status="running", stage="planning", progress_message="Loading project context…")
 
         if not enhancement_request:
-            # Initial render: generate missing contextual clips before planning.
-            _runway_pass(project_id, report)
+            # Runway is disabled by design: the pipeline now fills scene-role gaps
+            # with the hero-reuse + layered treatment rather than generated stock.
+            # The service code stays in-tree (app/services/runway.py); flip this
+            # block back on to re-enable gap generation.
+            # _runway_pass(project_id, report)
             _heygen_pass(project_id, report)
 
         with Session(db_engine) as s:

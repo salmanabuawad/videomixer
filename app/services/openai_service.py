@@ -96,12 +96,7 @@ def extract_knowledge(doc_text: str, asset_inventory: list | None = None) -> dic
 - narration_text: one continuous professional narration paragraph (~150–250 words) read aloud at marketing pace, matching the storyboard order. No stage directions — spoken words only.
 - intro_script: 1–2 sentences (≤45 words) for a presenter avatar to OPEN the video — warm, grounded, credible. No stage directions.
 - closing_script: 1–2 sentences (≤40 words) for the same presenter to CLOSE with a call to action. No stage directions.
-- generated_clip_requests: array of objects, one per scene role that the uploaded assets do NOT already cover, with:
-    - role: same tag as in the storyboard.scenes[].role
-    - needed: true
-    - prompt: a concise realistic text-to-video prompt (≤220 chars) suitable for Runway Gen-3. Describe subject, setting, camera, mood. No brand names.
-    - duration_sec: target clip duration in seconds (3–8).
-  If every storyboard role is covered by the uploads, return an empty array.
+- generated_clip_requests: return an empty array []. Generated contextual clips are not part of the current pipeline — the hero clip is reused with variations (trim, scale, layered composition) when uploads don't cover a storyboard role.
 
 The storyboard must read as a coherent arc — problem → intro → spray → mix → compact → advantage → closing — and total implied runtime should target ~55–65 seconds. Do not invent technical claims not in the source material.
 
